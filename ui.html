@@ -1,0 +1,498 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>code-flow</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --border:#e5e7eb; --muted:#6b7280;
+          --accent:#4f46e5; --green:#16a34a; --red:#dc2626; --blue:#2563eb; }
+  * { box-sizing: border-box; }
+  body { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; margin:0;
+         background:var(--bg); color:#111827; }
+  .wrap { max-width:1000px; margin:0 auto; padding:28px 20px 80px; }
+  header { display:flex; align-items:baseline; gap:12px; margin-bottom:20px; }
+  h1 { font-size:24px; margin:0; }
+  h1 .logo { color:var(--accent); }
+  .sub { color:var(--muted); font-size:13px; }
+  h2 { font-size:15px; margin:28px 0 10px; color:#374151; text-transform:uppercase;
+       letter-spacing:.05em; }
+  /* tabs */
+  .tabs { display:flex; gap:4px; border-bottom:2px solid var(--border); margin:18px 0 20px; }
+  .tabs button { background:none; border:none; padding:10px 18px; font-size:14.5px;
+                 font-weight:600; color:var(--muted); cursor:pointer; position:relative;
+                 border-radius:8px 8px 0 0; }
+  .tabs button:hover { color:#111827; background:#eef0f3; }
+  .tabs button.active { color:var(--accent); }
+  .tabs button.active::after { content:""; position:absolute; left:0; right:0;
+                 bottom:-2px; height:2px; background:var(--accent); }
+  .tabs .runbadge { background:var(--blue); color:#fff; border-radius:999px;
+                 font-size:11px; padding:1px 8px; margin-left:6px; vertical-align:1px;
+                 animation:pulse 1.2s infinite; }
+  .tabpane { display:none; }
+  .tabpane.active { display:block; }
+  .pager { display:flex; gap:12px; align-items:center; justify-content:center; margin:14px 0 4px; }
+  .pager button { border:1px solid var(--border); background:#fff; color:#374151;
+                  border-radius:8px; padding:5px 14px; font-size:13px; cursor:pointer; }
+  .pager button:hover:not(:disabled) { background:#f3f4f6; }
+  .pager button:disabled { opacity:.4; cursor:default; }
+  .pager span { font-size:12.5px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
+          padding:16px 18px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .flow { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .flow .info { flex:1; min-width:240px; }
+  .flow b { font-size:16px; }
+  .flow .file { color:var(--muted); font-size:12px; margin-left:8px; }
+  .flow .desc { color:var(--muted); font-size:13px; margin-top:3px; }
+  .chips { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { background:#eef2ff; color:#4338ca; border-radius:6px; font-size:11.5px;
+          padding:2px 8px; }
+  .chip.cond { background:#fef9c3; color:#854d0e; }
+  .chip.loop { background:#dcfce7; color:#166534; }
+  .chip.retry { background:#fee2e2; color:#991b1b; }
+  button.run { background:var(--accent); color:#fff; border:none; border-radius:8px;
+               padding:9px 22px; font-size:14px; font-weight:600; cursor:pointer; }
+  button.run:hover { filter:brightness(1.1); }
+  button.run:disabled { opacity:.5; cursor:wait; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:12px;
+       padding:6px 10px; border-bottom:1px solid var(--border); }
+  td { padding:8px 10px; border-bottom:1px solid #f3f4f6; }
+  tr:hover td { background:#fafafa; }
+  .badge { padding:2px 10px; border-radius:999px; font-size:11.5px; font-weight:700;
+           color:#fff; display:inline-block; }
+  .SUCCESS { background:var(--green); } .FAILED { background:var(--red); }
+  .RUNNING { background:var(--blue); animation:pulse 1.2s infinite; }
+  .CANCELLED { background:#d97706; } .INTERRUPTED { background:#7c3aed; }
+  a.cancel { color:var(--red); margin-left:10px; font-size:12px; cursor:pointer; }
+  @keyframes pulse { 50% { opacity:.55; } }
+  a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
+  .muted { color:var(--muted); }
+  .empty { color:var(--muted); font-size:14px; padding:14px; }
+  .toast { position:fixed; bottom:20px; right:20px; background:#111827; color:#fff;
+           padding:10px 18px; border-radius:10px; font-size:13.5px; opacity:0;
+           transition:opacity .3s; pointer-events:none; }
+  .toast.show { opacity:1; }
+  .err-card { border-color:#fecaca; background:#fef2f2; color:#991b1b; font-size:13px; }
+  code { background:#f3f4f6; padding:1px 5px; border-radius:4px; font-size:12px; }
+  /* input modal */
+  .overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none;
+             align-items:center; justify-content:center; z-index:50; }
+  .overlay.show { display:flex; }
+  .modal { background:#fff; border-radius:14px; width:min(560px, 92vw);
+           padding:22px 24px; box-shadow:0 20px 50px rgba(0,0,0,.25); }
+  .modal h3 { margin:0 0 2px; font-size:17px; }
+  .modal .sub { margin-bottom:12px; }
+  .modal textarea { width:100%; min-height:180px; font-family:ui-monospace,Menlo,Consolas,monospace;
+                    font-size:13px; border:1px solid var(--border); border-radius:8px;
+                    padding:10px 12px; resize:vertical; background:#f8fafc; }
+  .modal textarea:focus { outline:2px solid #c7d2fe; border-color:var(--accent); }
+  .modal textarea.bad { border-color:var(--red); outline-color:#fecaca; }
+  .json-err { color:var(--red); font-size:12.5px; min-height:18px; margin-top:6px; }
+  .modal .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:12px; }
+  button.ghost { background:#fff; color:#374151; border:1px solid var(--border);
+                 border-radius:8px; padding:9px 18px; font-size:14px; cursor:pointer; }
+  button.ghost:hover { background:#f9fafb; }
+  .field { margin:10px 0 14px; }
+  .field label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .field select { width:100%; padding:8px 10px; border:1px solid var(--border);
+                  border-radius:8px; font-size:14px; background:#fff; }
+  .env-preview { margin:8px 0 0; background:#f8fafc; border:1px solid var(--border);
+                 border-radius:8px; padding:8px 10px; font-size:12px; color:#334155;
+                 max-height:110px; overflow:auto;
+                 font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .env-chip { background:#ecfeff; color:#0e7490; border:1px solid #a5f3fc;
+              border-radius:6px; font-size:11px; padding:1px 7px; margin-left:6px; }
+  .tag { background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe; border-radius:999px;
+         font-size:11px; padding:1px 9px; margin-left:6px; cursor:pointer; }
+  .tag:hover { background:#ede9fe; }
+  .tagbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0 0 12px; }
+  .tagbar .tbtn { border:1px solid var(--border); background:#fff; color:#374151;
+                  border-radius:999px; padding:4px 14px; font-size:12.5px; cursor:pointer; }
+  .tagbar .tbtn:hover { background:#f9fafb; }
+  .tagbar .tbtn.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .filterbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0 0 10px; }
+  .filterbar select, .filterbar input { border:1px solid var(--border); border-radius:8px;
+       padding:6px 10px; font-size:13px; background:#fff; color:#374151; }
+  .filterbar input { width:160px; }
+  .filterbar .count { color:var(--muted); font-size:12.5px; margin-left:auto; }
+  h2 .row { display:flex; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="logo">⚡ code-flow</span></h1>
+    <span class="sub">annotation-based workflow engine</span>
+  </header>
+
+  <div class="tabs">
+    <button id="tab-btn-workflows" class="active" onclick="switchTab('workflows')">Workflows</button>
+    <button id="tab-btn-history" onclick="switchTab('history')">History<span class="runbadge" id="running-badge" style="display:none"></span></button>
+  </div>
+
+  <div class="tabpane active" id="tab-workflows">
+  <div class="tagbar" id="tagbar"></div>
+  <div id="flows"><div class="empty">loading…</div></div>
+  <div class="pager" id="flows-pager"></div>
+  </div>
+
+  <div class="tabpane" id="tab-history">
+  <div class="filterbar">
+    <select id="f-workflow"><option value="">all workflows</option></select>
+    <select id="f-status">
+      <option value="">any status</option>
+      <option>SUCCESS</option><option>FAILED</option><option>RUNNING</option>
+      <option>CANCELLED</option><option>INTERRUPTED</option>
+    </select>
+    <select id="f-tag"><option value="">any tag</option></select>
+    <select id="f-env"><option value="">any environment</option></select>
+    <label style="font-size:12.5px;color:var(--muted)">
+      <input type="checkbox" id="f-subs" checked style="width:auto"> show sub-runs
+    </label>
+    <select id="f-pagesize" title="rows per page">
+      <option value="10">10 / page</option>
+      <option value="20" selected>20 / page</option>
+      <option value="50">50 / page</option>
+      <option value="100">100 / page</option>
+    </select>
+    <span class="count" id="f-count"></span>
+  </div>
+  <div class="card" style="padding:6px 8px">
+    <table>
+      <thead><tr>
+        <th>Workflow</th><th>Status</th><th>Started</th><th>Duration</th>
+        <th>Steps</th><th>Report</th>
+      </tr></thead>
+      <tbody id="runs"><tr><td colspan="6" class="empty">no runs yet</td></tr></tbody>
+    </table>
+  </div>
+  <div class="pager" id="runs-pager"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3 id="modal-title">Run workflow</h3>
+    <div class="field">
+      <label for="modal-env">Environment</label>
+      <select id="modal-env"></select>
+      <pre id="env-preview" class="env-preview" style="display:none"></pre>
+    </div>
+    <div class="sub">Inputs (JSON) — edit before starting, or leave as-is for defaults</div>
+    <textarea id="modal-json" spellcheck="false"></textarea>
+    <div class="json-err" id="json-err"></div>
+    <div class="actions">
+      <button class="ghost" id="modal-cancel">Cancel</button>
+      <button class="run" id="modal-run">▶ Run</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function renderPager(elId, page, totalPages, info, onChange) {
+  const el = $(elId);
+  el.innerHTML = "";
+  if (totalPages <= 1) {
+    if (info) el.innerHTML = `<span class="muted">${info}</span>`;
+    return;
+  }
+  const mk = (txt, disabled, target) => {
+    const b = document.createElement("button");
+    b.textContent = txt; b.disabled = disabled;
+    b.onclick = () => onChange(target);
+    return b;
+  };
+  el.appendChild(mk("← prev", page <= 1, page - 1));
+  const span = document.createElement("span");
+  span.className = "muted";
+  span.textContent = `page ${page} / ${totalPages}` + (info ? ` — ${info}` : "");
+  el.appendChild(span);
+  el.appendChild(mk("next →", page >= totalPages, page + 1));
+}
+
+function paginate(items, page, pageSize) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const p = Math.min(Math.max(1, page), totalPages);
+  return { page: p, totalPages, slice: items.slice((p - 1) * pageSize, p * pageSize) };
+}
+
+function switchTab(name) {
+  for (const t of ["workflows", "history"]) {
+    $("tab-" + t).classList.toggle("active", t === name);
+    $("tab-btn-" + t).classList.toggle("active", t === name);
+  }
+}
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2500);
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString() + " " + d.toLocaleTimeString();
+}
+function fmtDur(ms) {
+  if (ms == null) return "—";
+  return ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms";
+}
+
+let flowsData = [];
+let flowTagFilter = "";   // "" = all
+let flowPage = 1;
+const FLOWS_PER_PAGE = 10;
+
+function renderTagbar() {
+  const tags = [...new Set(flowsData.flatMap(f => f.tags || []))].sort();
+  const bar = $("tagbar");
+  if (!tags.length) { bar.innerHTML = ""; return; }
+  bar.innerHTML =
+    `<button class="tbtn ${flowTagFilter === "" ? "active" : ""}" data-tag="">all</button>` +
+    tags.map(t =>
+      `<button class="tbtn ${flowTagFilter === t ? "active" : ""}" data-tag="${t}">${t}</button>`
+    ).join("");
+  bar.querySelectorAll(".tbtn").forEach(b => {
+    b.onclick = () => { flowTagFilter = b.dataset.tag; flowPage = 1; renderFlows(); };
+  });
+}
+
+async function loadFlows() {
+  const res = await fetch("/api/flows");
+  const data = await res.json();
+  flowsData = data.flows;
+  window.flowErrors = data.errors || [];
+  renderFlows();
+}
+
+function renderFlows() {
+  renderTagbar();
+  const el = $("flows");
+  el.innerHTML = "";
+  const flows = flowTagFilter
+    ? flowsData.filter(f => (f.tags || []).includes(flowTagFilter))
+    : flowsData;
+  if (!flows.length) {
+    el.innerHTML = flowsData.length
+      ? '<div class="empty">No workflows with this tag.</div>'
+      : '<div class="empty">No workflows found — drop a .py file into the <code>workflows/</code> folder.</div>';
+  }
+  const pg = paginate(flows, flowPage, FLOWS_PER_PAGE);
+  flowPage = pg.page;
+  renderPager("flows-pager", pg.page, pg.totalPages, `${flows.length} workflow(s)`,
+    p => { flowPage = p; renderFlows(); });
+  for (const f of pg.slice) {
+    const chips = f.steps.map(s => {
+      let cls = "chip", extra = "";
+      if (s.condition) { cls += " cond"; extra = " ?"; }
+      else if (s.loop) { cls += " loop"; extra = " ⟳"; }
+      else if (s.retry > 0) { cls += " retry"; extra = " ↻" + s.retry; }
+      return `<span class="${cls}" title="${s.condition || s.loop || (s.retry ? 'retry x' + s.retry : '')}">${s.name}${extra}</span>`;
+    }).join("");
+    const tagChips = (f.tags || []).map(t =>
+      `<span class="tag" data-tag="${t}" title="filter by tag '${t}'">${t}</span>`).join("");
+    const div = document.createElement("div");
+    div.className = "card flow";
+    div.innerHTML = `
+      <div class="info">
+        <b>${f.name}</b><span class="file">${f.file}</span>${tagChips}
+        <div class="desc">${f.description || ""}</div>
+        <div class="chips">${chips}</div>
+      </div>
+      <button class="run" data-flow="${f.name}">▶ Run</button>`;
+    el.appendChild(div);
+  }
+  for (const e of (window.flowErrors || [])) {
+    const div = document.createElement("div");
+    div.className = "card err-card";
+    div.textContent = `⚠ ${e.file}: ${e.error}`;
+    el.appendChild(div);
+  }
+  const flowDefaults = {};
+  for (const f of flowsData) flowDefaults[f.name] = f.inputs || {};
+  el.querySelectorAll("button.run").forEach(btn => {
+    btn.onclick = () => openRunModal(btn.dataset.flow, flowDefaults[btn.dataset.flow]);
+  });
+  el.querySelectorAll(".tag").forEach(chip => {
+    chip.onclick = () => { flowTagFilter = chip.dataset.tag; renderFlows(); };
+  });
+}
+
+// ---- input modal -----------------------------------------------------------
+let modalFlow = null;
+let envCatalog = {};   // name -> values
+const overlay = $("overlay"), modalJson = $("modal-json"), jsonErr = $("json-err");
+const envSelect = $("modal-env"), envPreview = $("env-preview");
+
+async function loadEnvironments() {
+  try {
+    const res = await fetch("/api/environments");
+    const data = await res.json();
+    envCatalog = {};
+    for (const e of data.environments) envCatalog[e.name] = e.values;
+    const current = envSelect.value;
+    envSelect.innerHTML = '<option value="">— none —</option>' +
+      data.environments.map(e => `<option value="${e.name}">${e.name}</option>`).join("");
+    if (current && envCatalog[current] !== undefined) envSelect.value = current;
+    for (const err of (data.errors || [])) console.warn("environment file error:", err);
+  } catch (e) { console.warn(e); }
+}
+
+envSelect.onchange = () => {
+  const v = envSelect.value;
+  if (v && envCatalog[v]) {
+    envPreview.textContent = JSON.stringify(envCatalog[v], null, 2);
+    envPreview.style.display = "block";
+  } else envPreview.style.display = "none";
+};
+
+function openRunModal(flow, defaults) {
+  modalFlow = flow;
+  $("modal-title").textContent = "Run " + flow;
+  modalJson.value = JSON.stringify(defaults || {}, null, 2);
+  modalJson.classList.remove("bad");
+  jsonErr.textContent = "";
+  loadEnvironments();
+  envSelect.onchange();
+  overlay.classList.add("show");
+  modalJson.focus();
+}
+function closeModal() { overlay.classList.remove("show"); modalFlow = null; }
+
+$("modal-cancel").onclick = closeModal;
+overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+modalJson.addEventListener("input", () => {
+  modalJson.classList.remove("bad"); jsonErr.textContent = "";
+});
+
+$("modal-run").onclick = async () => {
+  let inputs = {};
+  const text = modalJson.value.trim();
+  if (text) {
+    try {
+      inputs = JSON.parse(text);
+      if (typeof inputs !== "object" || Array.isArray(inputs) || inputs === null)
+        throw new Error("must be a JSON object, e.g. {\"amount\": 50}");
+    } catch (e) {
+      modalJson.classList.add("bad");
+      jsonErr.textContent = "Invalid JSON: " + e.message;
+      return;
+    }
+  }
+  const btn = $("modal-run");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/run/" + encodeURIComponent(modalFlow), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inputs: inputs, env: envSelect.value || null }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      toast(`Started ${modalFlow}` + (data.environment ? ` on ${data.environment}` : "") + ` (run ${data.run_id})`);
+      closeModal();
+      switchTab("history");   // jump to history to watch the run
+    }
+    else jsonErr.textContent = "Error: " + (data.detail || res.status);
+  } catch (e) { jsonErr.textContent = "Error: " + e; }
+  btn.disabled = false;
+  loadRuns();
+};
+
+let runsData = [];
+let runPage = 1;
+
+function refreshFilterOptions() {
+  const fill = (sel, values, firstLabel) => {
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">${firstLabel}</option>` +
+      values.map(v => `<option value="${v}">${v}</option>`).join("");
+    if (cur && values.includes(cur)) sel.value = cur;
+  };
+  fill($("f-workflow"), [...new Set(runsData.map(r => r.workflow))].sort(), "all workflows");
+  fill($("f-tag"), [...new Set(runsData.flatMap(r => r.tags || []))].sort(), "any tag");
+  fill($("f-env"), [...new Set(runsData.map(r => r.environment).filter(Boolean))].sort(), "any environment");
+}
+
+function renderRuns() {
+  const tbody = $("runs");
+  const fw = $("f-workflow").value, fs = $("f-status").value,
+        ft = $("f-tag").value, fe = $("f-env").value, subs = $("f-subs").checked;
+  const runs = runsData.filter(r =>
+    (!fw || r.workflow === fw) &&
+    (!fs || r.status === fs) &&
+    (!ft || (r.tags || []).includes(ft)) &&
+    (!fe || r.environment === fe) &&
+    (subs || !r.parent_run_id)
+  );
+  $("f-count").textContent = runs.length === runsData.length
+    ? `${runs.length} run(s)` : `${runs.length} of ${runsData.length} run(s)`;
+  if (!runs.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${runsData.length ? "no runs match the filters" : "no runs yet"}</td></tr>`;
+    renderPager("runs-pager", 1, 1, "", () => {});
+    return;
+  }
+  const pageSize = parseInt($("f-pagesize").value, 10) || 20;
+  const pg = paginate(runs, runPage, pageSize);
+  runPage = pg.page;
+  renderPager("runs-pager", pg.page, pg.totalPages, `${runs.length} run(s)`,
+    p => { runPage = p; renderRuns(); });
+  tbody.innerHTML = pg.slice.map(r => `
+    <tr>
+      <td>${r.parent_run_id ? '<span class="muted" title="sub-workflow of run ' + r.parent_run_id + '">↳ </span>' : ""}<b>${r.workflow}</b> <span class="muted">${r.run_id}</span>${r.environment ? `<span class="env-chip">${r.environment}</span>` : ""}${(r.tags || []).map(t => `<span class="tag" onclick="setRunTagFilter('${t}')" title="filter history by '${t}'">${t}</span>`).join("")}</td>
+      <td><span class="badge ${r.status}">${r.status}</span>
+          ${r.error ? `<div class="muted" style="font-size:11px">${r.error}</div>` : ""}</td>
+      <td class="muted">${fmtTime(r.started_at)}</td>
+      <td class="muted">${fmtDur(r.duration_ms)}</td>
+      <td class="muted">${r.steps ?? "—"}</td>
+      <td><a href="/reports/${r.run_id}" target="_blank">view report</a>${
+        r.status === "RUNNING" ? `<a class="cancel" onclick="cancelRun('${r.run_id}')" title="stop this run">✕ cancel</a>` : ""
+      }</td>
+    </tr>`).join("");
+}
+
+async function cancelRun(runId) {
+  try {
+    const res = await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+    const data = await res.json();
+    toast(res.ok ? `Cancelling run ${runId}…` : `Error: ${data.detail || res.status}`);
+  } catch (e) { toast("Error: " + e); }
+  loadRuns();
+}
+
+async function loadRuns() {
+  const res = await fetch("/api/runs");
+  runsData = (await res.json()).runs;
+  const running = runsData.filter(r => r.status === "RUNNING").length;
+  const badge = $("running-badge");
+  badge.style.display = running ? "inline-block" : "none";
+  badge.textContent = running;
+  refreshFilterOptions();
+  renderRuns();
+}
+
+["f-workflow", "f-status", "f-tag", "f-env", "f-subs", "f-pagesize"].forEach(id => {
+  $(id).onchange = () => { runPage = 1; renderRuns(); };
+});
+
+function setRunTagFilter(tag) {
+  const sel = $("f-tag");
+  if (![...sel.options].some(o => o.value === tag))
+    sel.insertAdjacentHTML("beforeend", `<option value="${tag}">${tag}</option>`);
+  sel.value = tag;
+  runPage = 1;
+  renderRuns();
+}
+
+loadFlows();
+loadRuns();
+setInterval(loadRuns, 2000);   // live status refresh
+setInterval(loadFlows, 15000); // pick up new/edited workflow files
+</script>
+</body>
+</html>

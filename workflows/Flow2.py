@@ -1,0 +1,49 @@
+"""Sample workflow 2: batch ETL — shows loops and dynamic next-step override."""
+import time
+
+from engine import Workflow, start, step
+
+
+class BatchEtlFlow(Workflow):
+    """Fetches a list of files, processes each one in a loop, then either
+    publishes or archives the batch depending on how many rows came out."""
+
+    description = "Batch ETL demo — loop over items + dynamic branching"
+    tags = ["etl", "demo"]
+    inputs = {"batch_size": 5}
+
+    @start(next="Extract")
+    def begin(self, ctx):
+        self.log(f"Starting ETL batch of {ctx['batch_size']} files")
+
+    @step(name="Extract", next="Transform")
+    def extract(self, ctx):
+        files = [f"data_{i:03d}.csv" for i in range(1, ctx["batch_size"] + 1)]
+        self.log(f"Found {len(files)} files")
+        return {"files": files, "rows": 0}
+
+    @step(name="Transform", next="Decide", loop="f in files", retry=2, retry_delay=0.2)
+    def transform(self, ctx):
+        """Runs once per file thanks to loop="f in files"."""
+        time.sleep(0.15)  # simulate work
+        rows = 10 + len(ctx["f"])
+        self.log(f"Processed {ctx['f']} -> {rows} rows")
+        return {"rows": ctx["rows"] + rows}
+
+    @step(name="Decide", next="Publish")
+    def decide(self, ctx):
+        """Return {"__next__": ...} to pick the next step at runtime."""
+        if ctx["rows"] < 50:
+            self.log(f"Only {ctx['rows']} rows — archiving instead of publishing")
+            return {"__next__": "Archive"}
+        self.log(f"{ctx['rows']} rows — publishing")
+
+    @step(name="Publish")
+    def publish(self, ctx):
+        self.log("Published batch to warehouse")
+        self.outputs({"published": True, "total_rows": ctx["rows"]})
+
+    @step(name="Archive")
+    def archive(self, ctx):
+        self.log("Batch archived for review")
+        self.outputs({"published": False, "total_rows": ctx["rows"]})

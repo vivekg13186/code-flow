@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# execution history — generated at runtime, don't version reports
+history/
+
+# workflow drafts (skipped by the engine too)
+workflows/_drafts/
+
+# environment files often hold credentials/config you may not want in git.
+# Committed by default since the samples are harmless — uncomment to ignore:
+# environments/*.json
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,5 @@
+{
+  "api_url": "https://dev.api.local",
+  "currency": "EUR",
+  "dry_run": true
+}

@@ -1,0 +1,14 @@
+services:
+  codeflow:
+    build: .
+    container_name: codeflow
+    ports:
+      - "8000:8000"
+    volumes:
+      # your flows live OUTSIDE the container — edit them on the host and
+      # the UI picks up changes live (the folder is re-scanned per request)
+      - ./workflows:/data/workflows
+      - ./environments:/data/environments
+      # history persists across container rebuilds/restarts
+      - ./history:/data/history
+    restart: unless-stopped

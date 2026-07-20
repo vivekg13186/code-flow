@@ -1,0 +1,5 @@
+{
+  "api_url": "https://api.example.com",
+  "currency": "EUR",
+  "dry_run": false
+}
