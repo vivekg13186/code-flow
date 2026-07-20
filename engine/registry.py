@@ -43,6 +43,13 @@ def discover_workflows(folder: str | Path) -> Tuple[Dict[str, Type[Workflow]], L
     if not folder.is_dir():
         return registry, errors
 
+    # make the workflows root importable so flow files can import each other
+    # and shared helper modules:  `from _lib.helpers import x`  or
+    # `from billing.common import y`  (subfolders work as namespace packages)
+    folder_str = str(folder.resolve())
+    if folder_str not in sys.path:
+        sys.path.insert(0, folder_str)
+
     for py_file in sorted(folder.rglob("*.py")):
         rel = py_file.relative_to(folder)
         if any(part.startswith("_") for part in rel.parts):  # _foo.py, _drafts/, __pycache__/

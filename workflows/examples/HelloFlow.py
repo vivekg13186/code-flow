@@ -5,6 +5,8 @@ so subfolders act as groups in the UI.
 """
 from engine import Workflow, start, step
 
+from _lib.helpers import shout  # shared code from workflows/_lib/
+
 
 class HelloFlow(Workflow):
     description = "Minimal flow living in a subfolder (auto-tagged 'examples')"
@@ -16,6 +18,6 @@ class HelloFlow(Workflow):
 
     @step(name="Greet")
     def greet(self, ctx):
-        message = f"Hello, {ctx['who']}!"
+        message = shout(f"Hello, {ctx['who']}")
         self.log(message)
         self.outputs({"message": message})

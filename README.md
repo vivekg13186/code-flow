@@ -68,6 +68,24 @@ to its tags automatically. A flow in `workflows/billing/Invoices.py` gets a
 `billing` tag and shows up under that tag in the UI's tag bar and history
 filters — no need to declare it in the class.
 
+**Sharing code between flows**: the `workflows/` root is on the import
+path, so flow files can import each other and shared modules. The cleanest
+pattern is an underscore folder (ignored by discovery, importable as
+normal):
+
+```
+workflows/
+├── _lib/
+│   └── helpers.py        # def money(amount): ...
+└── billing/
+    └── Invoices.py       # from _lib.helpers import money
+```
+
+Subfolder imports need no `__init__.py` (`from billing.common import x`
+works via namespace packages). Note that a non-underscore helper file is
+also *executed* by the discovery scan — keep shared code in `_lib/` (or any
+`_folder/`) to avoid that.
+
 ```python
 from engine import Workflow, start, step
 

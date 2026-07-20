@@ -1,2 +1,7 @@
 fastapi>=0.110
 uvicorn>=0.29
+
+# common libraries available to workflow steps
+requests>=2.31
+PyYAML>=6.0
+dirtyjson>=1.0
