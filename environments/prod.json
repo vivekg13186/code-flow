@@ -1,5 +1,6 @@
 {
   "api_url": "https://api.example.com",
   "currency": "EUR",
-  "dry_run": false
+  "dry_run": false,
+  "api_token": "${CODEFLOW_PROD_TOKEN}"
 }

@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from engine import WorkflowRunner, discover_workflows
-from engine.environments import load_environments, set_environments_dir
+from engine.environments import load_environments, mask_env, set_environments_dir
 from engine.registry import set_workflows_dir, workflow_summary
 from engine.reports import HistoryStore
 
@@ -99,7 +99,8 @@ def list_flows():
 def list_environments():
     envs, errors = load_environments(ENVIRONMENTS_DIR)
     return {
-        "environments": [{"name": n, "values": v} for n, v in envs.items()],
+        # secrets are masked in the UI; runs receive the real values
+        "environments": [{"name": n, "values": mask_env(v)} for n, v in envs.items()],
         "errors": errors,
     }
 
@@ -171,6 +172,28 @@ def cancel_run(run_id: str):
         raise HTTPException(409, f"Run is {rec.get('status')}, not RUNNING")
     event.set()
     return {"run_id": run_id, "cancelling": True}
+
+
+@app.delete("/api/runs/{run_id}")
+def delete_run(run_id: str):
+    with _runs_lock:
+        rec = _live_runs.get(run_id)
+        if rec and rec.get("status") == "RUNNING":
+            raise HTTPException(409, "Run is still RUNNING — cancel it first")
+        _live_runs.pop(run_id, None)
+    if not store.delete_run(run_id):
+        raise HTTPException(404, "Run not found")
+    return {"deleted": run_id}
+
+
+@app.delete("/api/runs")
+def clear_history():
+    """Delete all finished runs (RUNNING ones are kept)."""
+    deleted = store.clear(keep_statuses=("RUNNING",))
+    with _runs_lock:
+        for rid in [r for r, rec in _live_runs.items() if rec.get("status") != "RUNNING"]:
+            _live_runs.pop(rid, None)
+    return {"deleted": deleted}
 
 
 @app.get("/api/runs/{run_id}")

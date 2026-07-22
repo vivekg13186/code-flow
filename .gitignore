@@ -16,6 +16,9 @@ workflows/_drafts/
 # Committed by default since the samples are harmless — uncomment to ignore:
 # environments/*.json
 
+# real secret values for ${VAR} references (docker compose reads this)
+.env
+
 # editors / OS
 .idea/
 .vscode/

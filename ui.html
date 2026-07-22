@@ -37,6 +37,41 @@
   .pager button:hover:not(:disabled) { background:#f3f4f6; }
   .pager button:disabled { opacity:.4; cursor:default; }
   .pager span { font-size:12.5px; }
+  button.view { background:#fff; color:var(--accent); border:1px solid #c7d2fe;
+                border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600;
+                cursor:pointer; }
+  button.view:hover { background:#eef2ff; }
+  .modal.wide { width:min(560px, 94vw); }
+  .diagram { background:#fafbfc; border:1px solid var(--border); border-radius:10px;
+             padding:22px 18px; overflow:auto; max-height:70vh; }
+  .diagram-note { color:var(--muted); font-size:12px; margin-top:8px; }
+  /* vertical stepper */
+  .stepper { display:flex; flex-direction:column; align-items:center; }
+  .snode { background:#fff; border:1px solid var(--border); border-radius:10px;
+           padding:10px 16px; min-width:260px; max-width:100%; text-align:center;
+           box-shadow:0 1px 2px rgba(0,0,0,.05); }
+  .snode b { font-size:14px; }
+  .snode.start { border-color:var(--accent); background:#eef2ff; border-radius:999px; }
+  .snode.start b { color:#4338ca; }
+  .snode.cond { border-left:4px solid #f59e0b; }
+  .snode.end { border-radius:999px; background:#f0fdf4; border-color:#86efac;
+               min-width:100px; padding:7px 22px; }
+  .snode.end b { color:#166534; font-size:13px; }
+  .snode .fn { color:var(--muted); font-size:11.5px; margin-left:6px; }
+  .sbadges { display:flex; gap:5px; justify-content:center; flex-wrap:wrap; margin-top:6px; }
+  .sb { font-size:10.5px; padding:1px 8px; border-radius:999px; }
+  .sb.cond { background:#fef9c3; color:#854d0e; }
+  .sb.loop { background:#dcfce7; color:#166534; }
+  .sb.retry { background:#fee2e2; color:#991b1b; }
+  .sb.tmo { background:#e0e7ff; color:#3730a3; }
+  .sb.coe { background:#f3e8ff; color:#6b21a8; }
+  .sconn { display:flex; flex-direction:column; align-items:center; color:#9ca3af; }
+  .sconn .line { width:2px; height:16px; background:#d1d5db; }
+  .sconn .arrow { font-size:11px; line-height:8px; margin-top:-1px; }
+  .sbranch-title { color:var(--muted); font-size:12px; margin:20px 0 10px;
+                   border-top:1px dashed var(--border); padding-top:14px; width:100%;
+                   text-align:center; }
+  .swarn { color:#b45309; font-size:12px; margin-top:4px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
           padding:16px 18px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
   .flow { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
@@ -65,6 +100,12 @@
   .RUNNING { background:var(--blue); animation:pulse 1.2s infinite; }
   .CANCELLED { background:#d97706; } .INTERRUPTED { background:#7c3aed; }
   a.cancel { color:var(--red); margin-left:10px; font-size:12px; cursor:pointer; }
+  a.del { color:var(--muted); margin-left:10px; font-size:12px; cursor:pointer; }
+  a.del:hover { color:var(--red); }
+  .filterbar button.ghost { border:1px solid var(--border); background:#fff; color:#374151;
+      border-radius:8px; padding:6px 12px; font-size:12.5px; cursor:pointer; }
+  .filterbar button.ghost:hover { background:#f9fafb; }
+  .filterbar button.danger:hover { border-color:#fecaca; color:var(--red); background:#fef2f2; }
   @keyframes pulse { 50% { opacity:.55; } }
   a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
   .muted { color:var(--muted); }
@@ -150,6 +191,7 @@
     <label style="font-size:12.5px;color:var(--muted)">
       <input type="checkbox" id="f-subs" checked style="width:auto"> show sub-runs
     </label>
+    <button class="ghost danger" id="clear-history" title="delete all finished runs">🗑 clear history</button>
     <select id="f-pagesize" title="rows per page">
       <option value="10">10 / page</option>
       <option value="20" selected>20 / page</option>
@@ -171,6 +213,17 @@
   </div>
 </div>
 <div class="toast" id="toast"></div>
+
+<div class="overlay" id="flow-overlay">
+  <div class="modal wide">
+    <h3 id="flow-title">Flow</h3>
+    <div class="diagram" id="flow-diagram"></div>
+    <div class="diagram-note">amber border = conditional step · runtime branches via <code>__next__</code> and sub-workflow calls are not shown</div>
+    <div class="actions">
+      <button class="ghost" id="flow-close">Close</button>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="overlay">
   <div class="modal">
@@ -303,6 +356,7 @@ function renderFlows() {
         <div class="desc">${f.description || ""}</div>
         <div class="chips">${chips}</div>
       </div>
+      <button class="view" data-view="${f.name}">⬡ Flow</button>
       <button class="run" data-flow="${f.name}">▶ Run</button>`;
     el.appendChild(div);
   }
@@ -320,7 +374,83 @@ function renderFlows() {
   el.querySelectorAll(".tag").forEach(chip => {
     chip.onclick = () => { flowTagFilter = chip.dataset.tag; renderFlows(); };
   });
+  el.querySelectorAll("button.view").forEach(btn => {
+    btn.onclick = () => showFlowDiagram(btn.dataset.view);
+  });
 }
+
+// ---- flow diagram (pure HTML/CSS vertical stepper) --------------------------
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function stepNode(s) {
+  const badges = [];
+  if (s.condition) badges.push(`<span class="sb cond">if ${esc(s.condition)}</span>`);
+  if (s.loop) badges.push(`<span class="sb loop">for ${esc(s.loop)}</span>`);
+  if (s.retry) badges.push(`<span class="sb retry">retry ${s.retry}x${s.retry_delay ? " / " + s.retry_delay + "s" : ""}${s.retry_on ? " on " + esc(s.retry_on.join(", ")) : ""}</span>`);
+  if (s.timeout) badges.push(`<span class="sb tmo">timeout ${s.timeout}s</span>`);
+  if (s.continue_on_error) badges.push(`<span class="sb coe">continue on error</span>`);
+  const cls = "snode" + (s.is_start ? " start" : "") + (s.condition ? " cond" : "");
+  return `<div class="${cls}">
+    <b>${s.is_start ? "▶ " : ""}${esc(s.name)}</b>
+    ${badges.length ? `<div class="sbadges">${badges.join("")}</div>` : ""}
+  </div>`;
+}
+
+const connector = '<div class="sconn"><div class="line"></div><div class="arrow">▼</div></div>';
+const endNode = '<div class="snode end"><b>✓ End</b></div>';
+
+function buildStepper(f) {
+  const byName = {};
+  f.steps.forEach(s => { byName[s.name] = s; });
+  // walk the main chain from the start step
+  const chain = [];
+  const seen = new Set();
+  let cur = f.steps.find(s => s.is_start);
+  let warn = "";
+  while (cur && !seen.has(cur.name)) {
+    chain.push(cur); seen.add(cur.name);
+    if (cur.next && !byName[cur.next]) {
+      warn = `⚠ step "${esc(cur.name)}" points to unknown step "${esc(cur.next)}"`;
+      cur = null;
+    } else {
+      cur = cur.next ? byName[cur.next] : null;
+    }
+  }
+  let html = '<div class="stepper">'
+    + chain.map(stepNode).join(connector)
+    + (warn ? "" : connector + endNode)
+    + "</div>";
+  if (warn) html += `<div class="swarn">${warn}</div>`;
+
+  // steps not on the main chain = runtime branch targets (via __next__ etc.)
+  const rest = f.steps.filter(s => !seen.has(s.name));
+  if (rest.length) {
+    html += '<div class="sbranch-title">runtime branches — reached via <code>__next__</code></div>'
+      + '<div class="stepper">'
+      + rest.map(s => {
+          let seg = stepNode(s);
+          if (s.next && byName[s.next]) seg += connector
+            + `<div class="snode"><b>${esc(s.next)}</b><div class="sbadges"><span class="sb tmo">continues main flow</span></div></div>`;
+          else seg += connector + endNode;
+          return seg;
+        }).join('<div style="height:18px"></div>')
+      + "</div>";
+  }
+  return html;
+}
+
+function showFlowDiagram(name) {
+  const f = flowsData.find(x => x.name === name);
+  if (!f) return;
+  $("flow-title").textContent = name + " — flow";
+  $("flow-diagram").innerHTML = buildStepper(f);
+  $("flow-overlay").classList.add("show");
+}
+
+$("flow-close").onclick = () => $("flow-overlay").classList.remove("show");
+$("flow-overlay").onclick = (e) => {
+  if (e.target === $("flow-overlay")) $("flow-overlay").classList.remove("show");
+};
 
 // ---- input modal -----------------------------------------------------------
 let modalFlow = null;
@@ -365,7 +495,9 @@ function closeModal() { overlay.classList.remove("show"); modalFlow = null; }
 
 $("modal-cancel").onclick = closeModal;
 overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeModal(); $("flow-overlay").classList.remove("show"); }
+});
 modalJson.addEventListener("input", () => {
   modalJson.classList.remove("bad"); jsonErr.textContent = "";
 });
@@ -451,10 +583,35 @@ function renderRuns() {
       <td class="muted">${fmtDur(r.duration_ms)}</td>
       <td class="muted">${r.steps ?? "—"}</td>
       <td><a href="/reports/${r.run_id}" target="_blank">view report</a>${
-        r.status === "RUNNING" ? `<a class="cancel" onclick="cancelRun('${r.run_id}')" title="stop this run">✕ cancel</a>` : ""
+        r.status === "RUNNING"
+          ? `<a class="cancel" onclick="cancelRun('${r.run_id}')" title="stop this run">✕ cancel</a>`
+          : `<a class="del" onclick="deleteRun('${r.run_id}')" title="delete this run from history">🗑</a>`
       }</td>
     </tr>`).join("");
 }
+
+async function deleteRun(runId) {
+  if (!confirm(`Delete run ${runId} and its report? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/runs/${runId}`, { method: "DELETE" });
+    const data = await res.json();
+    toast(res.ok ? `Deleted run ${runId}` : `Error: ${data.detail || res.status}`);
+  } catch (e) { toast("Error: " + e); }
+  loadRuns();
+}
+
+$("clear-history").onclick = async () => {
+  const finished = runsData.filter(r => r.status !== "RUNNING").length;
+  if (!finished) { toast("Nothing to clear"); return; }
+  if (!confirm(`Delete all ${finished} finished run(s) and their reports? Running flows are kept. This cannot be undone.`)) return;
+  try {
+    const res = await fetch("/api/runs", { method: "DELETE" });
+    const data = await res.json();
+    toast(res.ok ? `Deleted ${data.deleted} run(s)` : `Error: ${data.detail || res.status}`);
+  } catch (e) { toast("Error: " + e); }
+  runPage = 1;
+  loadRuns();
+};
 
 async function cancelRun(runId) {
   try {

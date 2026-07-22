@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import inspect
+import json
 import re
 import threading
 import time
@@ -39,6 +40,12 @@ _SAFE_BUILTINS = {
 def _eval_expr(expr: str, ctx: Dict[str, Any]) -> Any:
     """Evaluate a small Python expression against the workflow context."""
     return eval(expr, {"__builtins__": _SAFE_BUILTINS}, dict(ctx))
+
+
+def _ctx_key(step_name: str) -> str:
+    """Derive a valid identifier from a step name for ctx keys:
+    'Fetch Data' -> 'Fetch_Data' (so conditions can use Fetch_Data_result)."""
+    return re.sub(r"\W+", "_", step_name).strip("_")
 
 
 def _parse_loop(loop: str):
@@ -88,6 +95,7 @@ class RunRecord:
     tags: List[str] = field(default_factory=list)  # inherited from the workflow class
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
+    context: Dict[str, Any] = field(default_factory=dict)  # ctx snapshot (masked)
     started_at: str = ""
     ended_at: Optional[str] = None
     duration_ms: Optional[float] = None
@@ -123,9 +131,12 @@ class WorkflowRunner:
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunRecord:
+        from .environments import mask_env
+
         wf: Workflow = self.workflow_cls(inputs=self.inputs)
         wf._runner = self
-        wf.env = dict(self.env)
+        # steps get the REAL values; "__secrets__" bookkeeping is stripped
+        wf.env = {k: v for k, v in self.env.items() if k != "__secrets__"}
         wf.ctx["env"] = wf.env  # steps + conditions can read env['key']
         if not self.call_chain:
             self.call_chain = [wf.name]
@@ -134,7 +145,7 @@ class WorkflowRunner:
             workflow=wf.name,
             parent_run_id=self.parent_run_id,
             environment=self.env_name,
-            env_values=dict(self.env),
+            env_values=mask_env(self.env),  # persisted/displayed form is masked
             tags=sorted(getattr(self.workflow_cls, "tags", []) or []),
             inputs=dict(wf.inputs),
             started_at=_now(),
@@ -165,6 +176,7 @@ class WorkflowRunner:
                 record.steps.append(step_rec)
                 self.on_update(record)
                 override_next = self._execute_step(wf, meta, step_rec)
+                record.context = self._snapshot_ctx(wf)  # live view of ctx
                 self.on_update(record)
                 current = override_next if override_next is not None else meta.get("next")
             record.status = "SUCCESS"
@@ -180,12 +192,35 @@ class WorkflowRunner:
             record.error = f"{type(exc).__name__}: {exc}"
         finally:
             record.outputs = dict(wf.outputs())
+            record.context = self._snapshot_ctx(wf)
             record.ended_at = _now()
             record.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             self.on_update(record)
         return record
 
     # ---------------------------------------------------------------- steps
+    def _snapshot_ctx(self, wf: Workflow) -> Dict[str, Any]:
+        """Display-safe snapshot of the context for reports: the env dict is
+        left out (it has its own report section), secret-looking keys are
+        masked, and oversized values are truncated to a repr."""
+        from .environments import MASK, is_secret_key
+
+        snap: Dict[str, Any] = {}
+        for k, v in wf.ctx.items():
+            if k == "env":
+                continue
+            if is_secret_key(k):
+                snap[k] = MASK
+                continue
+            try:
+                if len(json.dumps(v, default=str)) <= 2000:
+                    snap[k] = v
+                else:
+                    snap[k] = _short_repr(v, 2000)
+            except Exception:  # noqa: BLE001 - non-serializable value
+                snap[k] = _short_repr(v)
+        return snap
+
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():
             raise RunCancelled()
@@ -235,7 +270,7 @@ class WorkflowRunner:
                     results.append(res)
                     self._merge_result(wf, res)
                 rec.result = _short_repr(results)
-                wf.ctx[f"{meta['name']}_results"] = results
+                wf.ctx[f"{_ctx_key(meta['name'])}_results"] = results
             else:
                 res = self._call_with_retry(wf, func, meta, rec)
                 if isinstance(res, dict) and "__next__" in res:
@@ -243,7 +278,7 @@ class WorkflowRunner:
                 self._merge_result(wf, res)
                 if res is not None:
                     rec.result = _short_repr(res)
-                    wf.ctx[f"{meta['name']}_result"] = res
+                    wf.ctx[f"{_ctx_key(meta['name'])}_result"] = res
 
             rec.status = "SUCCESS"
             return override_next
@@ -253,7 +288,7 @@ class WorkflowRunner:
             rec.traceback = traceback.format_exc()
             if meta.get("continue_on_error"):
                 rec.continued = True
-                wf.ctx[f"{meta['name']}_error"] = rec.error
+                wf.ctx[f"{_ctx_key(meta['name'])}_error"] = rec.error
                 rec.logs.append(
                     f"{_now()}  continue_on_error=True — flow continues with next step"
                 )

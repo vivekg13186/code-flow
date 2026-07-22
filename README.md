@@ -124,13 +124,28 @@ class MyFlow(Workflow):
 ### Runtime features
 
 - **Context**: steps receive `ctx` (dict). Dicts returned by a step are merged
-  into it; non-dict results land in `ctx["<StepName>_result"]`.
+  into it; non-dict results land in `ctx["<StepName>_result"]`. Step names
+  are sanitized for these derived keys — non-identifier characters become
+  underscores, so a step named `"Fetch Data"` produces `Fetch_Data_result`
+  (and `Fetch_Data_results` / `Fetch_Data_error`), usable directly in
+  `condition=` / `loop=` expressions.
 - **Dynamic branching**: return `{"__next__": "OtherStep"}` to pick the next
   step at runtime.
 - **Tags**: set `tags = ["billing", "demo"]` on a workflow class. The UI shows
   a tag bar to filter the workflow list, runs inherit their workflow's tags,
   and the history can be filtered by workflow, status, tag, environment, and
   with/without sub-runs. Tag chips anywhere are clickable shortcuts.
+- **Secrets in environments**: reference OS environment variables with
+  `"api_token": "${MY_TOKEN}"` in an env JSON file — resolved on the server
+  at load time, so the secret never lives in the file or in git. Masking is
+  automatic in the run dialog, run records, and HTML reports for (a) any
+  `${VAR}`-resolved value and (b) any key whose name looks secret
+  (`*_token`, `*_secret`, `*password*`, `*api_key*`, `*credential*`,
+  `*private*`). Steps always receive the real values via `self.env`. With
+  Docker, put values in a git-ignored `.env` file and pass them through in
+  `docker-compose.yml`. If a referenced var isn't set, the environments API
+  reports a warning and the placeholder stays visible. Don't log secrets
+  with `self.log()` — logs are stored in reports as-is.
 - **Environments**: drop JSON files into `environments/` (e.g. `dev.json`,
   `prod.json`) and pick one in the run dialog. The values are available in
   steps as `self.env` / `ctx["env"]`, and in conditions:
@@ -166,7 +181,10 @@ class MyFlow(Workflow):
 - Lists every flow found in `workflows/` with a **▶ Run** button
 - **History** table with live status (auto-refreshes every 2 s)
 - Every execution is stored as an **HTML report** under `history/` and served
-  at `/reports/<run_id>`
+  at `/reports/<run_id>` — including inputs, environment, per-step logs,
+  outputs, and a **Context** section with the workflow's context values
+  (updated live while the run progresses; secret-looking keys masked,
+  oversized values truncated, the `env` dict shown in its own section)
 - Multiple flows (or the same flow multiple times) run **concurrently** on a
   thread pool
 - REST API docs at `/api/docs`

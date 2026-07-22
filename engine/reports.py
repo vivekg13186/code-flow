@@ -106,6 +106,43 @@ class HistoryStore:
     def report_path(self, run_id: str) -> Path:
         return self.folder / f"{run_id}.html"
 
+    def delete_run(self, run_id: str) -> bool:
+        """Remove one run's report files + index entry. Returns True if found."""
+        import json as _json
+
+        with _LOCK:
+            index = self._read_index()
+            new_index = [e for e in index if e["run_id"] != run_id]
+            found = len(new_index) != len(index)
+            for suffix in (".json", ".html"):
+                p = self.folder / f"{run_id}{suffix}"
+                if p.exists():
+                    p.unlink()
+                    found = True
+            if found:
+                self.index_file.write_text(
+                    _json.dumps(new_index, indent=2, default=str), encoding="utf-8")
+        return found
+
+    def clear(self, keep_statuses=("RUNNING",)) -> int:
+        """Delete all runs except those whose status is in keep_statuses.
+        Returns the number of deleted runs."""
+        import json as _json
+
+        with _LOCK:
+            index = self._read_index()
+            keep, drop = [], []
+            for e in index:
+                (keep if e.get("status") in keep_statuses else drop).append(e)
+            for e in drop:
+                for suffix in (".json", ".html"):
+                    p = self.folder / f"{e['run_id']}{suffix}"
+                    if p.exists():
+                        p.unlink()
+            self.index_file.write_text(
+                _json.dumps(keep, indent=2, default=str), encoding="utf-8")
+        return len(drop)
+
     def _read_index(self) -> List[Dict[str, Any]]:
         if self.index_file.exists():
             try:
@@ -245,4 +282,5 @@ def render_report(run: Dict[str, Any]) -> str:
   {f"<h2>Environment — {html.escape(run['environment'])}</h2><div class='card'>{_kv_table(run.get('env_values', {}))}</div>" if run.get('environment') else ""}
   <h2>Steps</h2>{''.join(steps_html) or "<p class='muted'>no steps executed</p>"}
   <h2>Outputs</h2><div class="card">{_kv_table(run.get('outputs', {}))}</div>
+  {f"<h2>Context</h2><div class='card'>{_kv_table(run.get('context', {}))}</div>" if run.get('context') else ""}
 </div></body></html>"""

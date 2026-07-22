@@ -11,4 +11,10 @@ services:
       - ./environments:/data/environments
       # history persists across container rebuilds/restarts
       - ./history:/data/history
+    # secrets: env JSON files can reference OS env vars as "${VAR}".
+    # Put real values in a .env file next to this compose file (git-ignored):
+    #   CODEFLOW_PROD_TOKEN=xyz...
+    # and docker compose passes them through automatically via:
+    # environment:
+    #   - CODEFLOW_PROD_TOKEN=${CODEFLOW_PROD_TOKEN}
     restart: unless-stopped
