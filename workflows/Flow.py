@@ -11,6 +11,13 @@ class OrderFlow(Workflow):
     description = "Order processing demo — condition + retry + branching"
     tags = ["billing", "demo"]
     inputs = {"amount": 120, "customer": "ACME Corp"}
+    inputs_schema = {
+        "amount": {"type": "number", "min": 0.01, "required": True,
+                   "help": "order total — discount applies above 100"},
+        "customer": {"type": "string", "required": True},
+        "priority": {"type": "select", "options": ["low", "normal", "high"],
+                     "default": "normal"},
+    }
 
     @start(next="Validate")
     def begin(self, ctx):

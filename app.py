@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from engine import WorkflowRunner, discover_workflows
 from engine.environments import load_environments, mask_env, set_environments_dir
+from engine.inputs import validate_for_class
 from engine.registry import set_workflows_dir, workflow_summary
 from engine.reports import HistoryStore
 from engine.scheduler import Scheduler
@@ -163,6 +164,10 @@ def run_flow(flow_name: str, body: Optional[Dict[str, Any]] = None):
     else:
         inputs, env_name = body, None
 
+    inputs, errors = validate_for_class(cls, inputs)
+    if errors:
+        raise HTTPException(422, {"message": "input validation failed", "errors": errors})
+
     env = None
     if env_name:
         envs, _ = load_environments(ENVIRONMENTS_DIR)
@@ -292,6 +297,10 @@ def webhook_trigger(flow_name: str, body: Optional[Dict[str, Any]] = None,
         inputs, env_name = body.get("inputs") or {}, body.get("env") or env
     else:
         inputs, env_name = body, env
+
+    inputs, errors = validate_for_class(cls, inputs)
+    if errors:
+        raise HTTPException(422, {"message": "input validation failed", "errors": errors})
 
     env_values = None
     if env_name:

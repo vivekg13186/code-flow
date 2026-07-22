@@ -15,6 +15,10 @@ class ParallelFetchFlow(Workflow):
     description = "Fetch N sources concurrently (parallel=4) with backoff retries"
     tags = ["demo"]
     inputs = {"count": 8}
+    inputs_schema = {
+        "count": {"type": "integer", "min": 1, "max": 50, "required": True,
+                  "help": "number of sources to fetch"},
+    }
     webhook = True          # allow POST /api/hooks/ParallelFetchFlow
     # webhook_token = "s3cret"  # optionally require ?token= / X-Webhook-Token
 

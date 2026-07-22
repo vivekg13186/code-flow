@@ -90,6 +90,7 @@ def workflow_summary(cls: Type[Workflow]) -> dict:
         "tags": sorted(getattr(cls, "tags", []) or []),
         "file": getattr(cls, "_source_file", "?"),
         "inputs": dict(getattr(cls, "inputs", {}) or {}),
+        "inputs_schema": dict(getattr(cls, "inputs_schema", {}) or {}),
         "start": cls.start_step(),
         "steps": [
             {

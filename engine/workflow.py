@@ -41,6 +41,9 @@ class Workflow:
     tags: List[str] = []
     #: default inputs (may be overridden per-run)
     inputs: Dict[str, Any] = {}
+    #: optional typed-input schema — validates/coerces run inputs and turns
+    #: the run dialog into a form. See engine/inputs.py for the spec format.
+    inputs_schema: Dict[str, Dict[str, Any]] = {}
 
     def __init__(self, name: Optional[str] = None, inputs: Optional[Dict[str, Any]] = None):
         self.name = name or getattr(self.__class__, "name_override", None) or self.__class__.__name__

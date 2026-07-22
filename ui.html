@@ -87,6 +87,19 @@
   .daysrow label:has(input:checked) { background:#eef2ff; border-color:#c7d2fe; color:#4338ca; }
   .sched-err { color:var(--red); font-size:11.5px; margin-top:3px; white-space:nowrap;
       overflow:hidden; text-overflow:ellipsis; cursor:help; }
+  .mf { margin:10px 0; }
+  .mf label { display:block; font-size:12px; color:#374151; font-weight:600; margin-bottom:4px; }
+  .mf label .req { color:var(--red); }
+  .mf label .mf-type { color:var(--muted); font-weight:400; margin-left:5px; font-size:11px; }
+  .mf input[type=text], .mf input[type=number], .mf select, .mf textarea {
+      width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px;
+      font-size:13.5px; background:#fff; }
+  .mf textarea { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px;
+      min-height:60px; background:#f8fafc; }
+  .mf.bad input, .mf.bad select, .mf.bad textarea { border-color:var(--red); }
+  .mf .mf-help { color:var(--muted); font-size:11.5px; margin-top:3px; }
+  .mf .mf-err { color:var(--red); font-size:11.5px; margin-top:3px; }
+  .mf .mf-bool { display:flex; align-items:center; gap:8px; font-size:13.5px; color:#111827; }
   .switch { position:relative; width:36px; height:20px; display:inline-block; }
   .switch input { display:none; }
   .switch span { position:absolute; inset:0; background:#d1d5db; border-radius:999px;
@@ -413,7 +426,11 @@
       <select id="modal-env"></select>
       <pre id="env-preview" class="env-preview" style="display:none"></pre>
     </div>
-    <div class="sub">Inputs (JSON) — edit before starting, or leave as-is for defaults</div>
+    <div class="sub" style="display:flex;align-items:center">
+      <span id="inputs-label">Inputs</span>
+      <a id="mode-toggle" style="margin-left:auto;font-size:12px;cursor:pointer;display:none"></a>
+    </div>
+    <div id="modal-form" style="display:none"></div>
     <textarea id="modal-json" spellcheck="false"></textarea>
     <div class="json-err" id="json-err"></div>
     <div class="actions">
@@ -693,16 +710,108 @@ envSelect.onchange = () => {
   } else envPreview.style.display = "none";
 };
 
+let modalSchema = {};   // active flow's inputs_schema
+let modalRaw = false;   // true = raw JSON mode even when a schema exists
+
+function fieldHtml(name, spec, value) {
+  const typ = spec.type || "string";
+  const req = spec.required ? '<span class="req">*</span>' : "";
+  const label = `<label>${esc(spec.label || name)}${req}<span class="mf-type">${typ}</span></label>`;
+  const help = spec.help ? `<div class="mf-help">${esc(spec.help)}</div>` : "";
+  const v = value !== undefined && value !== null ? value : "";
+  let input;
+  if (typ === "boolean") {
+    input = `<div class="mf-bool"><input type="checkbox" id="mf-${name}" ${v === true || v === "true" ? "checked" : ""}> <span>enabled</span></div>`;
+  } else if (typ === "select") {
+    const opts = (spec.options || []).map(o =>
+      `<option ${String(o) === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("");
+    input = `<select id="mf-${name}">${spec.required ? "" : '<option value="">—</option>'}${opts}</select>`;
+  } else if (typ === "number" || typ === "integer") {
+    const step = typ === "integer" ? "1" : "any";
+    const mm = `${spec.min !== undefined ? `min="${spec.min}"` : ""} ${spec.max !== undefined ? `max="${spec.max}"` : ""}`;
+    input = `<input type="number" id="mf-${name}" step="${step}" ${mm} value="${esc(String(v))}">`;
+  } else if (typ === "json") {
+    input = `<textarea id="mf-${name}" spellcheck="false">${esc(typeof v === "string" ? v : (v === "" ? "" : JSON.stringify(v, null, 2)))}</textarea>`;
+  } else {
+    input = `<input type="text" id="mf-${name}" value="${esc(String(v))}">`;
+  }
+  return `<div class="mf" id="mfbox-${name}">${label}${input}${help}<div class="mf-err" id="mferr-${name}"></div></div>`;
+}
+
+function renderInputMode(defaults) {
+  const hasSchema = Object.keys(modalSchema).length > 0;
+  const toggle = $("mode-toggle");
+  toggle.style.display = hasSchema ? "" : "none";
+  toggle.textContent = modalRaw ? "form view" : "edit as JSON";
+  if (hasSchema && !modalRaw) {
+    $("inputs-label").textContent = "Inputs";
+    $("modal-form").style.display = "";
+    modalJson.style.display = "none";
+    $("modal-form").innerHTML = Object.entries(modalSchema).map(([name, spec]) =>
+      fieldHtml(name, spec, defaults[name] !== undefined ? defaults[name] : spec.default)).join("");
+  } else {
+    $("inputs-label").textContent = "Inputs (JSON)";
+    $("modal-form").style.display = "none";
+    modalJson.style.display = "";
+  }
+}
+
+function collectFormInputs() {
+  const inputs = {};
+  const errors = {};
+  for (const [name, spec] of Object.entries(modalSchema)) {
+    const el = $("mf-" + name);
+    if (!el) continue;
+    $("mfbox-" + name).classList.remove("bad");
+    $("mferr-" + name).textContent = "";
+    const typ = spec.type || "string";
+    let v;
+    if (typ === "boolean") v = el.checked;
+    else v = el.value;
+    if (v === "" || v === undefined) {
+      if (spec.required && spec.default === undefined) errors[name] = "required";
+      continue;
+    }
+    if (typ === "number" || typ === "integer") {
+      const n = Number(v);
+      if (Number.isNaN(n)) { errors[name] = "must be a number"; continue; }
+      v = n;
+    } else if (typ === "json") {
+      try { v = JSON.parse(v); } catch (e) { errors[name] = "invalid JSON"; continue; }
+    }
+    inputs[name] = v;
+  }
+  return { inputs, errors };
+}
+
+function showFieldErrors(errors) {
+  for (const [name, msg] of Object.entries(errors)) {
+    const box = $("mfbox-" + name);
+    if (box) { box.classList.add("bad"); $("mferr-" + name).textContent = msg; }
+  }
+  const rest = Object.keys(errors).filter(n => !$("mfbox-" + n));
+  jsonErr.textContent = rest.length ? "Invalid: " + rest.map(n => `${n}: ${errors[n]}`).join(", ") : "";
+}
+
+$("mode-toggle").onclick = () => {
+  modalRaw = !modalRaw;
+  const f = flowsData.find(x => x.name === modalFlow);
+  renderInputMode(JSON.parse(modalJson.value || "{}"));
+};
+
 function openRunModal(flow, defaults) {
   modalFlow = flow;
+  modalRaw = false;
+  const f = flowsData.find(x => x.name === flow);
+  modalSchema = (f && f.inputs_schema) || {};
   $("modal-title").textContent = "Run " + flow;
   modalJson.value = JSON.stringify(defaults || {}, null, 2);
   modalJson.classList.remove("bad");
   jsonErr.textContent = "";
+  renderInputMode(defaults || {});
   loadEnvironments();
   envSelect.onchange();
   overlay.classList.add("show");
-  modalJson.focus();
 }
 function closeModal() { overlay.classList.remove("show"); modalFlow = null; }
 
@@ -721,16 +830,23 @@ modalJson.addEventListener("input", () => {
 
 $("modal-run").onclick = async () => {
   let inputs = {};
-  const text = modalJson.value.trim();
-  if (text) {
-    try {
-      inputs = JSON.parse(text);
-      if (typeof inputs !== "object" || Array.isArray(inputs) || inputs === null)
-        throw new Error("must be a JSON object, e.g. {\"amount\": 50}");
-    } catch (e) {
-      modalJson.classList.add("bad");
-      jsonErr.textContent = "Invalid JSON: " + e.message;
-      return;
+  const formMode = Object.keys(modalSchema).length > 0 && !modalRaw;
+  if (formMode) {
+    const collected = collectFormInputs();
+    if (Object.keys(collected.errors).length) { showFieldErrors(collected.errors); return; }
+    inputs = collected.inputs;
+  } else {
+    const text = modalJson.value.trim();
+    if (text) {
+      try {
+        inputs = JSON.parse(text);
+        if (typeof inputs !== "object" || Array.isArray(inputs) || inputs === null)
+          throw new Error("must be a JSON object, e.g. {\"amount\": 50}");
+      } catch (e) {
+        modalJson.classList.add("bad");
+        jsonErr.textContent = "Invalid JSON: " + e.message;
+        return;
+      }
     }
   }
   const btn = $("modal-run");
@@ -746,8 +862,12 @@ $("modal-run").onclick = async () => {
       toast(`Started ${modalFlow}` + (data.environment ? ` on ${data.environment}` : "") + ` (run ${data.run_id})`);
       closeModal();
       switchTab("history");   // jump to history to watch the run
+    } else if (data.detail && data.detail.errors) {
+      showFieldErrors(data.detail.errors);   // server-side 422 field errors
+      if (!Object.keys(modalSchema).length || modalRaw)
+        jsonErr.textContent = "Invalid: " + Object.entries(data.detail.errors).map(([k, v]) => `${k}: ${v}`).join(", ");
     }
-    else jsonErr.textContent = "Error: " + (data.detail || res.status);
+    else jsonErr.textContent = "Error: " + (JSON.stringify(data.detail) || res.status);
   } catch (e) { jsonErr.textContent = "Error: " + e; }
   btn.disabled = false;
   loadRuns();

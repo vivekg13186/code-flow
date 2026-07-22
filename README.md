@@ -224,6 +224,34 @@ don't create history entries (auto-refresh would flood it); use the normal
 Run button for a persisted snapshot with a report. Deep-link a dashboard
 with `/#dashboards/<FlowName>`. See `workflows/examples/OpsDashboard.py`.
 
+### Typed inputs
+
+Add an optional `inputs_schema` and the run dialog becomes a proper form
+(text/number/checkbox/dropdown) instead of a JSON box, with validation on
+every start path — UI, API, webhook, scheduler, sub-workflow:
+
+```python
+class OrderFlow(Workflow):
+    inputs = {"amount": 120, "customer": "ACME Corp"}
+    inputs_schema = {
+        "amount":   {"type": "number", "min": 0.01, "required": True,
+                     "help": "order total"},
+        "customer": {"type": "string", "required": True},
+        "priority": {"type": "select", "options": ["low", "normal", "high"],
+                     "default": "normal"},
+        "notify":   {"type": "boolean", "default": False},
+        "extra":    {"type": "json"},
+    }
+```
+
+Types: `string` / `number` / `integer` / `boolean` / `select` / `json`.
+Spec keys: `required`, `default`, `min`/`max`, `options`, `help`, `label`.
+Values are coerced (`"42"` → `42`, `"true"` → `True`); bad inputs get a
+`422` with per-field errors from the API, and runs started any other way
+fail fast with a clear validation message instead of a confusing crash
+mid-flow. Keys not in the schema pass through untouched, and the run
+dialog keeps an "edit as JSON" escape hatch.
+
 ### Webhook triggers
 
 Let external systems start a flow. Opt in on the class:

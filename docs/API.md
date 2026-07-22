@@ -16,7 +16,7 @@ Errors follow FastAPI's shape:
 |------|---------|
 | 404  | Unknown flow / run / schedule / environment |
 | 409  | Operation conflicts with run state (e.g. deleting a RUNNING run) |
-| 422  | Invalid body (bad schedule spec, malformed JSON) |
+| 422  | Invalid body (bad schedule spec, malformed JSON, typed-input validation) — input errors come back as `{"detail": {"message": "input validation failed", "errors": {"amount": "must be >= 0.01"}}}` |
 | 500  | Flow failed to start / internal error |
 
 Run statuses: `RUNNING`, `SUCCESS`, `FAILED`, `CANCELLED` (user), `INTERRUPTED`

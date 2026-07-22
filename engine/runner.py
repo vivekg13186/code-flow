@@ -138,6 +138,16 @@ class WorkflowRunner:
 
         wf: Workflow = self.workflow_cls(inputs=self.inputs)
         wf._runner = self
+        # typed inputs: validate + coerce against the class schema (covers
+        # every start path — UI, API, webhook, scheduler, sub-workflow)
+        schema = getattr(self.workflow_cls, "inputs_schema", None)
+        input_errors: Dict[str, str] = {}
+        if schema:
+            from .inputs import apply_schema
+            cleaned, input_errors = apply_schema(schema, wf.inputs)
+            if not input_errors:
+                wf.inputs = cleaned
+                wf.ctx.update(cleaned)
         # steps get the REAL values; "__secrets__" bookkeeping is stripped
         wf.env = {k: v for k, v in self.env.items() if k != "__secrets__"}
         wf.ctx["env"] = wf.env  # steps + conditions can read env['key']
@@ -154,6 +164,14 @@ class WorkflowRunner:
             started_at=_now(),
         )
         t0 = time.monotonic()
+        if input_errors:
+            record.status = "FAILED"
+            record.error = "input validation failed: " + "; ".join(
+                f"{k}: {v}" for k, v in input_errors.items())
+            record.ended_at = _now()
+            record.duration_ms = 0.0
+            self.on_update(record)
+            return record
         steps_meta = self.workflow_cls.collect_steps()
         current = self.workflow_cls.start_step()
         if current is None:
