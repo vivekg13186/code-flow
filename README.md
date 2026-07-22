@@ -254,7 +254,9 @@ The **Schedules** tab lets you run flows automatically:
   oversized values truncated, the `env` dict shown in its own section)
 - Multiple flows (or the same flow multiple times) run **concurrently** on a
   thread pool
-- REST API docs at `/api/docs`
+- REST API: reference in [`docs/API.md`](docs/API.md), interactive Swagger
+  at `/api/docs`
+- Writing flows: see [`docs/BEST_PRACTICES.md`](docs/BEST_PRACTICES.md)
 
 ## Project layout
 
