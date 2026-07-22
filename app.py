@@ -13,11 +13,13 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from engine import WorkflowRunner, discover_workflows
 from engine.environments import load_environments, mask_env, set_environments_dir
 from engine.registry import set_workflows_dir, workflow_summary
 from engine.reports import HistoryStore
+from engine.scheduler import Scheduler
 
 BASE_DIR = Path(__file__).parent
 # folder locations are overridable so they can live outside the app
@@ -29,7 +31,17 @@ ENVIRONMENTS_DIR = Path(os.environ.get("CODEFLOW_ENVIRONMENTS_DIR", BASE_DIR / "
 set_workflows_dir(WORKFLOWS_DIR)  # lets steps resolve self.call_workflow(...)
 set_environments_dir(ENVIRONMENTS_DIR)
 
-app = FastAPI(title="code-flow", docs_url="/api/docs")
+app = FastAPI(title="code flow", docs_url="/api/docs")
+if (BASE_DIR / "static").is_dir():
+    app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    icon = BASE_DIR / "static" / "favicon.png"
+    if icon.exists():
+        return FileResponse(icon, media_type="image/png")
+    raise HTTPException(404)
 store = HistoryStore(HISTORY_DIR)
 executor = ThreadPoolExecutor(max_workers=8)  # multiple flows run concurrently
 
@@ -43,6 +55,30 @@ _cancel_events: Dict[str, threading.Event] = {}
 _interrupted = store.mark_interrupted()
 if _interrupted:
     print(f"[code-flow] marked {_interrupted} interrupted run(s) from previous session")
+
+
+def _scheduled_launch(flow_name: str, inputs: Optional[Dict[str, Any]],
+                      env_name: Optional[str]) -> str:
+    """Launcher used by the scheduler — same path as the Run button."""
+    registry, _ = _get_registry()
+    cls = registry.get(flow_name)
+    if cls is None:
+        raise ValueError(f"unknown workflow: {flow_name}")
+    env = None
+    if env_name:
+        envs, _ = load_environments(ENVIRONMENTS_DIR)
+        if env_name not in envs:
+            raise ValueError(f"unknown environment: {env_name}")
+        env = envs[env_name]
+    run_id = _launch(cls, inputs, env=env, env_name=env_name)
+    if not run_id:
+        raise RuntimeError("workflow failed to start")
+    return run_id
+
+
+SCHEDULES_FILE = Path(os.environ.get("CODEFLOW_SCHEDULES_FILE",
+                                     HISTORY_DIR / "schedules.json"))
+scheduler = Scheduler(SCHEDULES_FILE, _scheduled_launch)
 
 
 # ----------------------------------------------------------------- helpers
@@ -222,6 +258,81 @@ def run_detail(run_id: str):
     if json_path.exists():
         return JSONResponse(content=__import__("json").loads(json_path.read_text()))
     raise HTTPException(404, "Run not found")
+
+
+# --------------------------------------------------------------- dashboards
+@app.post("/api/dashboards/{flow_name}/render")
+def render_dashboard(flow_name: str, body: Optional[Dict[str, Any]] = None):
+    """Run a dashboard flow synchronously and return its widgets.
+
+    Dashboard refreshes are transient by design: they do NOT create history
+    entries or reports (auto-refresh every 10s would flood the history).
+    Use the normal Run button when you want a persisted snapshot."""
+    registry, _ = _get_registry()
+    cls = registry.get(flow_name)
+    if cls is None:
+        raise HTTPException(404, f"Unknown workflow: {flow_name}")
+
+    body = body or {}
+    inputs, env_name = body.get("inputs") or {}, body.get("env") or None
+    env = None
+    if env_name:
+        envs, _ = load_environments(ENVIRONMENTS_DIR)
+        if env_name not in envs:
+            raise HTTPException(404, f"Unknown environment: {env_name}")
+        env = envs[env_name]
+
+    rec = WorkflowRunner(cls, inputs=inputs, env=env, env_name=env_name).run()
+    return {
+        "run_id": rec.run_id,
+        "status": rec.status,
+        "error": rec.error,
+        "duration_ms": rec.duration_ms,
+        "widgets": rec.widgets,
+        "steps": [{"name": s.name, "status": s.status, "error": s.error} for s in rec.steps],
+    }
+
+
+# ---------------------------------------------------------------- schedules
+@app.get("/api/schedules")
+def list_schedules():
+    return {"schedules": scheduler.list()}
+
+
+@app.post("/api/schedules")
+def create_schedule(body: Dict[str, Any]):
+    try:
+        return scheduler.add(body or {})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.patch("/api/schedules/{sid}")
+def update_schedule(sid: str, body: Dict[str, Any]):
+    try:
+        s = scheduler.update(sid, body or {})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if s is None:
+        raise HTTPException(404, "Schedule not found")
+    return s
+
+
+@app.delete("/api/schedules/{sid}")
+def delete_schedule(sid: str):
+    if not scheduler.delete(sid):
+        raise HTTPException(404, "Schedule not found")
+    return {"deleted": sid}
+
+
+@app.post("/api/schedules/{sid}/run")
+def run_schedule_now(sid: str):
+    try:
+        return scheduler.fire(sid)
+    except KeyError:
+        raise HTTPException(404, "Schedule not found")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, str(exc))
 
 
 @app.get("/reports/{run_id}")

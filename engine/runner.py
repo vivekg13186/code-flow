@@ -96,6 +96,7 @@ class RunRecord:
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
     context: Dict[str, Any] = field(default_factory=dict)  # ctx snapshot (masked)
+    widgets: List[Dict[str, Any]] = field(default_factory=list)  # dashboard widgets
     started_at: str = ""
     ended_at: Optional[str] = None
     duration_ms: Optional[float] = None
@@ -193,6 +194,7 @@ class WorkflowRunner:
         finally:
             record.outputs = dict(wf.outputs())
             record.context = self._snapshot_ctx(wf)
+            record.widgets = list(wf.widgets())[:200]  # sanity cap
             record.ended_at = _now()
             record.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             self.on_update(record)

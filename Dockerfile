@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # the app itself — NOTE: workflows/, environments/ and history/ are NOT
 # baked into the image; they are volume-mounted (see docker-compose.yml)
 COPY engine/ ./engine/
+COPY static/ ./static/
 COPY app.py ui.html ./
 
 # where the mounted folders will appear inside the container

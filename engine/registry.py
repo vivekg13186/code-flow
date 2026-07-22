@@ -85,6 +85,7 @@ def workflow_summary(cls: Type[Workflow]) -> dict:
     return {
         "name": getattr(cls, "name_override", None) or cls.__name__,
         "description": (getattr(cls, "description", "") or (cls.__doc__ or "")).strip(),
+        "dashboard": bool(getattr(cls, "dashboard", False)),
         "tags": sorted(getattr(cls, "tags", []) or []),
         "file": getattr(cls, "_source_file", "?"),
         "inputs": dict(getattr(cls, "inputs", {}) or {}),

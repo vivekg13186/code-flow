@@ -1,6 +1,21 @@
-# ⚡ code-flow
+<p align="center"><img src="code_flow.png" alt="code flow" width="420"></p>
 
 A tiny **annotation-based workflow engine** in Python with a web UI.
+
+## Why code-flow
+
+- **See the values later.** Run a test or an API call and inspect what
+  happened afterwards — every execution is stored as an HTML report with
+  inputs, per-step logs, context and outputs. Most lightweight tools don't
+  give you history.
+- **Lightweight by design.** Run a sequence of steps without bringing up a
+  whole server farm, a queue, and a big bunch of setup. One process, one
+  `pip install`, done.
+- **Just Python.** No proprietary format, no custom DSL — a workflow is a
+  plain Python class with decorators. Flexible to build, and easy to
+  generate with AI later.
+- **Versioned with git.** Flows are code files, so branching, reviewing and
+  rolling back come for free — less work to maintain.
 
 ## Quick start
 
@@ -175,6 +190,52 @@ class MyFlow(Workflow):
 - **Timeouts**: `timeout=30` on a step bounds each attempt. Timed-out and
   cancelled step calls are abandoned (Python threads can't be killed), so
   design steps with external side effects to be idempotent.
+
+### Dashboards
+
+Any workflow becomes a dashboard by setting `dashboard = True` and building
+widgets in its steps:
+
+```python
+class OpsDashboard(Workflow):
+    dashboard = True
+
+    @step(name="Build")
+    def build(self, ctx):
+        self.widget("metric", title="Orders", value=128)
+        self.widget("stat", title="Revenue", value="€12.4k", delta="+8%")
+        self.widget("status", title="API", value="online", status="ok")   # ok/warn/err
+        self.widget("progress", title="Quota", value=64, max=100)
+        self.widget("chart", title="Sales", chart="bar",                  # bar/line/area/pie
+                    data={"Books": 850, "Games": 1200}, size="wide")
+        self.widget("table", title="Orders", rows=[{"id": 1, ...}], size="full")
+        self.widget("list", items=[...]); self.widget("alert", text="…", level="warn")
+        self.widget("section", title="Overview")   # full-width divider
+```
+
+The **Dashboards** tab lists dashboard flows; opening one runs the flow and
+renders the widgets in a grid (size `"wide"` spans 2 columns, `"full"` the
+whole row). The toolbar has Refresh, auto-refresh (10s–5m), and an
+environment picker. Tables sort on click and export to CSV; charts are
+dependency-free inline SVG. Dashboard refreshes are **transient** — they
+don't create history entries (auto-refresh would flood it); use the normal
+Run button for a persisted snapshot with a report. Deep-link a dashboard
+with `/#dashboards/<FlowName>`. See `workflows/examples/OpsDashboard.py`.
+
+### Scheduler
+
+The **Schedules** tab lets you run flows automatically:
+
+- **every N minutes** (interval), or **daily at HH:MM** with optional
+  weekday selection — times are the *server's* local time
+- each schedule carries its own inputs (JSON) and environment
+- toggle on/off, ▶ run now, delete; the table links to the last run's report
+  and shows the last error if a fire failed (e.g. flow renamed)
+- schedules persist in `history/schedules.json` (so the Docker history
+  volume keeps them); if the server was down when a schedule was due, it
+  fires once at startup, not once per missed period
+- API: `GET/POST /api/schedules`, `PATCH/DELETE /api/schedules/{id}`,
+  `POST /api/schedules/{id}/run`
 
 ## Web UI
 

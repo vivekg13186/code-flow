@@ -29,6 +29,9 @@ class Workflow:
 
     #: optional human description shown in the UI
     description: str = ""
+    #: True marks this flow as a dashboard — it appears in the Dashboards tab
+    #: and its steps build widgets via self.widget(...)
+    dashboard: bool = False
     #: tags used to group/filter workflows and their runs in the UI
     tags: List[str] = []
     #: default inputs (may be overridden per-run)
@@ -44,6 +47,7 @@ class Workflow:
         self._logger = None  # injected by the runner
         self._runner = None  # injected by the runner (used by call_workflow)
         self.env: Dict[str, Any] = {}  # selected environment (set by the runner)
+        self._widgets: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------ api
     def outputs(self, outputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -54,6 +58,28 @@ class Workflow:
 
     def set_output(self, key: str, value: Any) -> None:
         self._outputs[key] = value
+
+    def widget(self, type: str | Dict[str, Any], **props: Any) -> None:
+        """Add a dashboard widget. Either a full spec dict or type + props:
+
+            self.widget("metric", title="Orders", value=128)
+            self.widget("stat", title="Revenue", value="12.4k", delta="+8%")
+            self.widget("status", title="API", value="online", status="ok")
+            self.widget("progress", title="Quota", value=64, max=100)
+            self.widget("chart", title="Sales", chart="bar",
+                        data={"Books": 850, "Games": 1200}, size="wide")
+            self.widget("table", title="Orders", rows=[{...}, ...], size="full")
+            self.widget("list", items=[...]);  self.widget("alert", text="…", level="warn")
+            self.widget("text", text="…");     self.widget("json", value={...})
+            self.widget("section", title="Overview")   # full-width divider
+
+        size: "" (1 column) | "wide" (2 columns) | "full" (entire row).
+        """
+        spec = dict(type) if isinstance(type, dict) else {"type": type, **props}
+        self._widgets.append(spec)
+
+    def widgets(self) -> List[Dict[str, Any]]:
+        return self._widgets
 
     def call_workflow(self, workflow_name: str, inputs: Optional[Dict[str, Any]] = None,
                       env: Optional[str] = None) -> Dict[str, Any]:

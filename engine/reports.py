@@ -233,6 +233,7 @@ def render_report(run: Dict[str, Any]) -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <title>Run {html.escape(run['run_id'])} — {html.escape(run['workflow'])}</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
 <style>
   body {{ font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; margin: 0;
          background:#f5f6f8; color:#111827; }}

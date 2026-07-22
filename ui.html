@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>code-flow</title>
+<title>code flow</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
 <style>
   :root { --bg:#f5f6f8; --card:#fff; --border:#e5e7eb; --muted:#6b7280;
           --accent:#4f46e5; --green:#16a34a; --red:#dc2626; --blue:#2563eb; }
@@ -11,9 +12,11 @@
   body { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; margin:0;
          background:var(--bg); color:#111827; }
   .wrap { max-width:1000px; margin:0 auto; padding:28px 20px 80px; }
-  header { display:flex; align-items:baseline; gap:12px; margin-bottom:20px; }
+  header { display:flex; align-items:flex-end; gap:12px; margin-bottom:20px; }
   h1 { font-size:24px; margin:0; }
   h1 .logo { color:var(--accent); }
+  img.brand { height:46px; display:block; }
+  header .sub { padding-bottom:4px; }
   .sub { color:var(--muted); font-size:13px; }
   h2 { font-size:15px; margin:28px 0 10px; color:#374151; text-transform:uppercase;
        letter-spacing:.05em; }
@@ -72,6 +75,78 @@
                    border-top:1px dashed var(--border); padding-top:14px; width:100%;
                    text-align:center; }
   .swarn { color:#b45309; font-size:12px; margin-top:4px; }
+  .field input[type=number], .field input[type=time] { width:100%; padding:8px 10px;
+      border:1px solid var(--border); border-radius:8px; font-size:14px; }
+  .field textarea { width:100%; font-family:ui-monospace,Menlo,Consolas,monospace;
+      font-size:13px; border:1px solid var(--border); border-radius:8px;
+      padding:10px 12px; resize:vertical; background:#f8fafc; }
+  .daysrow { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .daysrow label { display:flex; align-items:center; gap:4px; font-size:12.5px;
+      color:#374151; border:1px solid var(--border); border-radius:8px;
+      padding:4px 8px; cursor:pointer; }
+  .daysrow label:has(input:checked) { background:#eef2ff; border-color:#c7d2fe; color:#4338ca; }
+  .sched-err { color:var(--red); font-size:11.5px; margin-top:3px; white-space:nowrap;
+      overflow:hidden; text-overflow:ellipsis; cursor:help; }
+  .switch { position:relative; width:36px; height:20px; display:inline-block; }
+  .switch input { display:none; }
+  .switch span { position:absolute; inset:0; background:#d1d5db; border-radius:999px;
+      transition:.15s; cursor:pointer; }
+  .switch span::after { content:""; position:absolute; width:16px; height:16px;
+      border-radius:50%; background:#fff; top:2px; left:2px; transition:.15s; }
+  .switch input:checked + span { background:var(--green); }
+  .switch input:checked + span::after { left:18px; }
+  /* ------- dashboards ------- */
+  .widget-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+                 gap:12px; align-items:start; }
+  .widget { background:#fff; border:1px solid var(--border); border-radius:12px;
+            padding:14px 16px; box-shadow:0 1px 2px rgba(0,0,0,.04); overflow:hidden; }
+  .widget.size-wide { grid-column:span 2; }
+  .widget.size-full, .widget-section { grid-column:1/-1; }
+  .widget-title { color:var(--muted); font-size:12px; font-weight:600;
+                  text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px; }
+  .widget-section { font-size:14px; font-weight:700; color:#374151; margin-top:8px;
+                    padding-bottom:4px; border-bottom:2px solid var(--border); }
+  .w-metric { font-size:30px; font-weight:800; color:#111827; line-height:1.1; }
+  .w-delta { font-size:13px; font-weight:600; margin-top:4px; }
+  .w-delta.up { color:var(--green); } .w-delta.down { color:var(--red); }
+  .w-delta.flat { color:var(--muted); }
+  .w-badge { padding:3px 12px; border-radius:999px; font-size:12.5px; font-weight:700; }
+  .badge-ok { background:#dcfce7; color:#166534; }
+  .badge-warn { background:#fef9c3; color:#854d0e; }
+  .badge-err { background:#fee2e2; color:#991b1b; }
+  .badge-neutral { background:#f3f4f6; color:#374151; }
+  .w-progress-bar { background:#f3f4f6; border-radius:999px; height:10px; overflow:hidden; }
+  .w-progress-fill { background:var(--accent); height:100%; border-radius:999px;
+                     transition:width .3s; }
+  .w-progress-label { font-size:12px; margin-top:6px; }
+  .w-list { margin:0; padding-left:18px; font-size:13.5px; }
+  .w-list li { margin:3px 0; }
+  .w-text { font-size:13.5px; white-space:pre-wrap; }
+  .w-alert { border-radius:10px; padding:10px 14px; font-size:13px; }
+  .alert-info { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; }
+  .alert-warn { background:#fffbeb; color:#b45309; border:1px solid #fde68a; }
+  .alert-error { background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; }
+  .w-json { background:#0f172a; color:#e2e8f0; border-radius:8px; padding:10px;
+            font-size:11.5px; overflow:auto; max-height:260px; margin:0; }
+  .w-link { font-size:14px; font-weight:600; }
+  .w-table-wrap { overflow:auto; max-height:340px; }
+  .w-table { width:100%; border-collapse:collapse; font-size:12.5px; table-layout:auto; }
+  .w-table th { position:sticky; top:0; background:#f9fafb; cursor:pointer;
+                white-space:nowrap; padding:6px 8px; }
+  .w-table td { padding:5px 8px; border-bottom:1px solid #f3f4f6; }
+  .w-table-toolbar { display:flex; justify-content:flex-end; margin-bottom:6px; }
+  .w-csv-btn { border:1px solid var(--border); background:#fff; border-radius:6px;
+               font-size:11px; padding:3px 9px; cursor:pointer; color:#374151; }
+  .w-csv-btn:hover { background:#f9fafb; }
+  .w-chart svg { width:100%; height:auto; display:block; }
+  .w-legend { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; font-size:11.5px; }
+  .w-legend span { display:inline-flex; align-items:center; gap:5px; color:#374151; }
+  .w-legend i { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  .dash-error { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c;
+                border-radius:10px; padding:12px 16px; margin-bottom:14px;
+                font-size:13px; white-space:pre-wrap; }
+  .dash-card { cursor:pointer; }
+  .dash-card:hover { border-color:#c7d2fe; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
           padding:16px 18px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
   .flow { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
@@ -185,19 +260,43 @@
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="logo">⚡ code-flow</span></h1>
-    <span class="sub">annotation-based workflow engine</span>
+    <img src="/static/logo.png" alt="code flow" class="brand"
+         onerror="this.outerHTML='<h1><span class=logo>⚡ code-flow</span></h1>'">
   </header>
 
   <div class="tabs">
     <button id="tab-btn-workflows" class="active" onclick="switchTab('workflows')">Workflows</button>
+    <button id="tab-btn-dashboards" onclick="switchTab('dashboards')">Dashboards</button>
     <button id="tab-btn-history" onclick="switchTab('history')">History<span class="runbadge" id="running-badge" style="display:none"></span></button>
+    <button id="tab-btn-schedules" onclick="switchTab('schedules')">Schedules</button>
   </div>
 
   <div class="tabpane active" id="tab-workflows">
   <div class="tagbar" id="tagbar"></div>
   <div id="flows"><div class="empty">loading…</div></div>
   <div class="pager" id="flows-pager"></div>
+  </div>
+
+  <div class="tabpane" id="tab-dashboards">
+    <div id="dash-list"></div>
+    <div id="dash-view" style="display:none">
+      <div class="filterbar">
+        <button class="ghost" id="dash-back">←</button>
+        <b id="dash-name" style="font-size:15px"></b>
+        <button class="run" id="dash-refresh"></button>
+        <select id="dash-auto">
+          <option value="0">auto: off</option>
+          <option value="10000">auto: 10s</option>
+          <option value="30000">auto: 30s</option>
+          <option value="60000">auto: 1m</option>
+          <option value="300000">auto: 5m</option>
+        </select>
+        <select id="dash-env"><option value="">env: none</option></select>
+        <span class="count" id="dash-updated"></span>
+      </div>
+      <div class="dash-error" id="dash-error" style="display:none"></div>
+      <div class="widget-grid" id="dash-grid"></div>
+    </div>
   </div>
 
   <div class="tabpane" id="tab-history">
@@ -235,8 +334,65 @@
   </div>
   <div class="pager" id="runs-pager"></div>
   </div>
+
+  <div class="tabpane" id="tab-schedules">
+  <div class="filterbar">
+    <button class="run" id="new-schedule"></button>
+    <span class="count" id="sched-count"></span>
+  </div>
+  <div class="card" style="padding:6px 8px">
+    <table>
+      <thead><tr>
+        <th>Workflow</th><th>When</th><th class="c-time">Next run</th>
+        <th class="c-time">Last run</th><th style="width:70px">Enabled</th>
+        <th class="c-acts">Actions</th>
+      </tr></thead>
+      <tbody id="scheds"><tr><td colspan="6" class="empty">no schedules yet</td></tr></tbody>
+    </table>
+  </div>
+  <div class="diagram-note">times are the server's local time · schedules persist in <code>history/schedules.json</code></div>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
+
+<div class="overlay" id="sched-overlay">
+  <div class="modal">
+    <h3 id="sched-title">New schedule</h3>
+    <div class="field">
+      <label for="sc-flow">Workflow</label>
+      <select id="sc-flow"></select>
+    </div>
+    <div class="field">
+      <label for="sc-type">Repeat</label>
+      <select id="sc-type">
+        <option value="interval">every N minutes</option>
+        <option value="daily">daily at a time</option>
+      </select>
+    </div>
+    <div class="field" id="sc-interval-box">
+      <label for="sc-min">Every (minutes)</label>
+      <input type="number" id="sc-min" min="1" value="60">
+    </div>
+    <div class="field" id="sc-daily-box" style="display:none">
+      <label for="sc-time">At (server local time)</label>
+      <input type="time" id="sc-time" value="07:00">
+      <div class="daysrow" id="sc-days"></div>
+    </div>
+    <div class="field">
+      <label for="sc-env">Environment</label>
+      <select id="sc-env"></select>
+    </div>
+    <div class="field">
+      <label for="sc-json">Inputs (JSON)</label>
+      <textarea id="sc-json" spellcheck="false" style="min-height:90px"></textarea>
+      <div class="json-err" id="sc-json-err"></div>
+    </div>
+    <div class="actions">
+      <button class="ghost" id="sc-cancel">Cancel</button>
+      <button class="run" id="sc-save">Save schedule</button>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="flow-overlay">
   <div class="modal wide">
@@ -282,6 +438,11 @@ const LUCIDE = {
   "loader-circle": '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
   "ban": '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
   "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  "clock": '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  "refresh-cw": '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  "layout-dashboard": '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+  "download": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
 };
 function I(name, size = 15, cls = "") {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="${cls}">${LUCIDE[name] || ""}</svg>`;
@@ -322,10 +483,12 @@ function paginate(items, page, pageSize) {
 }
 
 function switchTab(name) {
-  for (const t of ["workflows", "history"]) {
+  for (const t of ["workflows", "dashboards", "history", "schedules"]) {
     $("tab-" + t).classList.toggle("active", t === name);
     $("tab-btn-" + t).classList.toggle("active", t === name);
   }
+  if (name === "schedules") loadSchedules();
+  if (name === "dashboards") renderDashList();
 }
 
 function toast(msg) {
@@ -545,7 +708,11 @@ function closeModal() { overlay.classList.remove("show"); modalFlow = null; }
 $("modal-cancel").onclick = closeModal;
 overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeModal(); $("flow-overlay").classList.remove("show"); }
+  if (e.key === "Escape") {
+    closeModal();
+    $("flow-overlay").classList.remove("show");
+    $("sched-overlay").classList.remove("show");
+  }
 });
 modalJson.addEventListener("input", () => {
   modalJson.classList.remove("bad"); jsonErr.textContent = "";
@@ -776,9 +943,417 @@ function setRunTagFilter(tag) {
   renderRuns();
 }
 
+// ---- dashboards -------------------------------------------------------------
+const PALETTE = ["#6366f1", "#22c55e", "#f59e0b", "#ec4899", "#06b6d4", "#a855f7", "#ef4444", "#84cc16"];
+const dash = { flow: null, widgets: [], sort: {}, timer: null };
+
+async function renderDashList() {
+  if (!flowsData.length) await loadFlows();
+  const dashes = flowsData.filter(f => f.dashboard);
+  const el = $("dash-list");
+  el.style.display = ""; $("dash-view").style.display = "none";
+  stopDashTimer();
+  if (!dashes.length) {
+    el.innerHTML = '<div class="empty">No dashboards yet — set <code>dashboard = True</code> on a workflow class and build widgets with <code>self.widget(...)</code>.</div>';
+    return;
+  }
+  el.innerHTML = dashes.map(f => `
+    <div class="card flow dash-card" onclick="openDashboard('${esc(f.name)}')">
+      <div class="info">
+        <b>${I("layout-dashboard", 15)} ${esc(f.name)}</b><span class="file">${esc(f.file)}</span>
+        <div class="desc">${esc(f.description || "")}</div>
+      </div>
+      <button class="view">Open →</button>
+    </div>`).join("");
+}
+
+async function openDashboard(name) {
+  dash.flow = name; dash.widgets = []; dash.sort = {};
+  $("dash-list").style.display = "none";
+  $("dash-view").style.display = "";
+  $("dash-name").textContent = name;
+  $("dash-grid").innerHTML = "";
+  $("dash-error").style.display = "none";
+  try {
+    const envs = (await (await fetch("/api/environments")).json()).environments;
+    const cur = $("dash-env").value;
+    $("dash-env").innerHTML = '<option value="">env: none</option>' +
+      envs.map(e => `<option value="${esc(e.name)}">env: ${esc(e.name)}</option>`).join("");
+    if (cur) $("dash-env").value = cur;
+  } catch (e) {}
+  refreshDashboard();
+}
+
+async function refreshDashboard() {
+  if (!dash.flow) return;
+  const btn = $("dash-refresh");
+  btn.disabled = true;
+  $("dash-updated").textContent = "refreshing…";
+  try {
+    const res = await fetch(`/api/dashboards/${encodeURIComponent(dash.flow)}/render`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ env: $("dash-env").value || null }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.status);
+    if (data.status !== "SUCCESS") {
+      const failed = (data.steps || []).filter(s => s.status === "FAILED").map(s => `${s.name}: ${s.error}`);
+      $("dash-error").textContent = `Dashboard flow ${data.status}: ${data.error || ""}\n${failed.join("\n")}`;
+      $("dash-error").style.display = "";
+    } else {
+      $("dash-error").style.display = "none";
+    }
+    dash.widgets = data.widgets || [];
+    dash.sort = {};
+    renderWidgets();
+    $("dash-updated").textContent =
+      `updated ${new Date().toLocaleTimeString()} · ${Math.round(data.duration_ms || 0)} ms`;
+  } catch (e) {
+    $("dash-error").textContent = "Refresh failed: " + e.message;
+    $("dash-error").style.display = "";
+    $("dash-updated").textContent = "";
+  }
+  btn.disabled = false;
+}
+
+function stopDashTimer() {
+  if (dash.timer) { clearInterval(dash.timer); dash.timer = null; }
+}
+
+$("dash-refresh").innerHTML = `${I("refresh-cw", 13)} Refresh`;
+$("dash-back").onclick = () => renderDashList();
+$("dash-env").onchange = () => refreshDashboard();
+$("dash-auto").onchange = () => {
+  stopDashTimer();
+  const ms = parseInt($("dash-auto").value, 10);
+  if (ms > 0) dash.timer = setInterval(() => {
+    if ($("tab-dashboards").classList.contains("active") && dash.flow) refreshDashboard();
+  }, ms);
+};
+
+// -- widget renderers
+function coerceJson(v) {
+  if (typeof v !== "string") return v;
+  const s = v.trim();
+  if (!s || !/^[[{]/.test(s)) return v;
+  try { return JSON.parse(s); } catch { return v; }
+}
+const cellTxt = (v) => v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v));
+
+function chartData(input) {
+  const v = coerceJson(input);
+  if (v && typeof v === "object" && !Array.isArray(v))
+    return Object.entries(v).map(([name, raw]) => ({ name: String(name), value: Number(raw) || 0 }));
+  if (!Array.isArray(v)) return [];
+  return v.map((d, i) => {
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const name = d.label ?? d.name ?? d.x ?? d.key ?? String(i);
+      const raw = d.value ?? d.y ?? d.count ?? 0;
+      return { name: String(name), value: Number(raw) || 0 };
+    }
+    return { name: String(i), value: Number(d) || 0 };
+  });
+}
+
+function svgChart(kind, data) {
+  const W = 420, H = 230, padL = 36, padB = 26, padT = 12, padR = 8;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const max = Math.max(...data.map(d => d.value), 1);
+  const fmt = (n) => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(Math.round(n));
+  const xlab = (i, x, anchor = "middle") => data.length <= 12
+    ? `<text x="${x}" y="${H - 8}" font-size="9" fill="#6b7280" text-anchor="${anchor}">${esc(data[i].name).slice(0, 10)}</text>` : "";
+  let body = `<line x1="${padL}" y1="${padT + ih}" x2="${W - padR}" y2="${padT + ih}" stroke="#e5e7eb"/>`
+    + `<text x="${padL - 5}" y="${padT + 8}" font-size="9" fill="#6b7280" text-anchor="end">${fmt(max)}</text>`
+    + `<text x="${padL - 5}" y="${padT + ih}" font-size="9" fill="#6b7280" text-anchor="end">0</text>`;
+  let legend = "";
+
+  if (kind === "pie") {
+    const cx = W / 2, cy = (H - 10) / 2, r = Math.min(cx, cy) - 14;
+    const total = data.reduce((a, d) => a + d.value, 0) || 1;
+    let ang = -Math.PI / 2;
+    body = data.map((d, i) => {
+      const a2 = ang + (d.value / total) * Math.PI * 2;
+      const large = a2 - ang > Math.PI ? 1 : 0;
+      const p = `M${cx},${cy} L${cx + r * Math.cos(ang)},${cy + r * Math.sin(ang)} A${r},${r} 0 ${large} 1 ${cx + r * Math.cos(a2)},${cy + r * Math.sin(a2)} Z`;
+      ang = a2;
+      return `<path d="${p}" fill="${PALETTE[i % PALETTE.length]}" stroke="#fff" stroke-width="1.5"><title>${esc(d.name)}: ${d.value}</title></path>`;
+    }).join("");
+    legend = `<div class="w-legend">${data.map((d, i) =>
+      `<span><i style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(d.name)} (${d.value})</span>`).join("")}</div>`;
+  } else if (kind === "line" || kind === "area") {
+    const pts = data.map((d, i) => {
+      const x = padL + (data.length === 1 ? iw / 2 : (i / (data.length - 1)) * iw);
+      const y = padT + ih - (d.value / max) * ih;
+      return { x, y };
+    });
+    const path = pts.map(p => `${p.x},${p.y}`).join(" ");
+    if (kind === "area")
+      body += `<polygon points="${padL},${padT + ih} ${path} ${pts[pts.length - 1].x},${padT + ih}" fill="${PALETTE[0]}" fill-opacity="0.2"/>`;
+    body += `<polyline points="${path}" fill="none" stroke="${PALETTE[0]}" stroke-width="2"/>`;
+    body += pts.map((p, i) =>
+      `<circle cx="${p.x}" cy="${p.y}" r="2.5" fill="${PALETTE[0]}"><title>${esc(data[i].name)}: ${data[i].value}</title></circle>`).join("");
+    if (data.length) {
+      body += xlab(0, pts[0].x, "start") + (data.length > 1 ? xlab(data.length - 1, pts[pts.length - 1].x, "end") : "");
+      if (data.length > 4) body += xlab(Math.floor(data.length / 2), pts[Math.floor(data.length / 2)].x);
+    }
+  } else { // bar
+    const bw = Math.min(46, iw / data.length * 0.7);
+    body += data.map((d, i) => {
+      const x = padL + (i + 0.5) * (iw / data.length) - bw / 2;
+      const h = (d.value / max) * ih;
+      const y = padT + ih - h;
+      return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="3" fill="${PALETTE[i % PALETTE.length]}"><title>${esc(d.name)}: ${d.value}</title></rect>`
+        + (data.length <= 12 ? `<text x="${x + bw / 2}" y="${y - 3}" font-size="9" fill="#374151" text-anchor="middle">${fmt(d.value)}</text>` : "")
+        + xlab(i, x + bw / 2);
+    }).join("");
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${body}</svg>${legend}`;
+}
+
+function asRows(input) {
+  const v = coerceJson(input);
+  if (!Array.isArray(v)) return [];
+  return v.map(r => (r && typeof r === "object" && !Array.isArray(r)) ? r : { value: r });
+}
+
+function tableHtml(wIdx, w) {
+  const rows = asRows(w.rows);
+  if (!rows.length) return '<p class="muted">No rows.</p>';
+  const cols = [...new Set(rows.slice(0, 50).flatMap(r => Object.keys(r)))];
+  const st = dash.sort[wIdx];
+  let sorted = rows;
+  if (st) {
+    sorted = [...rows].sort((a, b) => {
+      const x = a[st.col], y = b[st.col];
+      const nx = Number(x), ny = Number(y);
+      if (!Number.isNaN(nx) && !Number.isNaN(ny) && x !== "" && y !== "") return st.dir * (nx - ny);
+      return st.dir * String(x ?? "").localeCompare(String(y ?? ""));
+    });
+  }
+  return `
+    <div class="w-table-toolbar"><button class="w-csv-btn" onclick="dashCsv(${wIdx})">${I("download", 11)} CSV</button></div>
+    <div class="w-table-wrap"><table class="w-table">
+      <thead><tr>${cols.map(c =>
+        `<th onclick="dashSort(${wIdx},'${esc(c)}')">${esc(c)} ${st && st.col === c ? (st.dir === 1 ? "▲" : "▼") : ""}</th>`).join("")}</tr></thead>
+      <tbody>${sorted.map(r =>
+        `<tr>${cols.map(c => `<td>${esc(cellTxt(r[c]))}</td>`).join("")}</tr>`).join("")}</tbody>
+    </table></div>`;
+}
+
+function dashSort(wIdx, col) {
+  const st = dash.sort[wIdx];
+  dash.sort[wIdx] = !st || st.col !== col ? { col, dir: 1 } : st.dir === 1 ? { col, dir: -1 } : null;
+  if (dash.sort[wIdx] === null) delete dash.sort[wIdx];
+  renderWidgets();
+}
+
+function dashCsv(wIdx) {
+  const w = dash.widgets[wIdx];
+  const rows = asRows(w.rows);
+  const cols = [...new Set(rows.slice(0, 50).flatMap(r => Object.keys(r)))];
+  const cell = v => { const s = cellTxt(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const csv = [cols.map(cell).join(",")].concat(rows.map(r => cols.map(c => cell(r[c])).join(","))).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }));
+  a.download = `${(w.title || "table").replace(/[^\w.-]+/g, "_")}.csv`;
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function widgetHtml(w, i) {
+  const size = (w.size === "wide" || w.size === "full") ? ` size-${w.size}` : "";
+  if (w.type === "section") return `<div class="widget-section">${esc(w.title || "")}</div>`;
+  let body = "";
+  switch (w.type) {
+    case "metric": body = `<div class="w-metric">${esc(cellTxt(w.value))}</div>`; break;
+    case "stat": {
+      const d = Number(w.delta) || 0;
+      const cls = d > 0 ? "up" : d < 0 ? "down" : "flat";
+      const arrow = d > 0 ? "▲" : d < 0 ? "▼" : "→";
+      body = `<div class="w-metric">${esc(cellTxt(w.value))}</div>` +
+        (w.delta != null && w.delta !== "" ? `<div class="w-delta ${cls}">${arrow} ${esc(cellTxt(w.delta))}</div>` : "");
+      break;
+    }
+    case "status": body = `<span class="w-badge badge-${esc(w.status || "neutral")}">${esc(cellTxt(w.value))}</span>`; break;
+    case "progress": {
+      const max = Number(w.max) || 100, val = Number(w.value) || 0;
+      const pct = Math.max(0, Math.min(100, val / max * 100));
+      body = `<div class="w-progress-bar"><div class="w-progress-fill" style="width:${pct}%"></div></div>
+        <div class="w-progress-label muted">${esc(cellTxt(w.value))} / ${esc(cellTxt(w.max ?? 100))} (${Math.round(pct)}%)</div>`;
+      break;
+    }
+    case "list": {
+      const items = coerceJson(w.items);
+      body = Array.isArray(items) && items.length
+        ? `<ul class="w-list">${items.map(it => `<li>${esc(cellTxt(it))}</li>`).join("")}</ul>`
+        : '<p class="muted">No items.</p>';
+      break;
+    }
+    case "alert": body = `<div class="w-alert alert-${esc(w.level || "info")}">${esc(cellTxt(w.text))}</div>`; break;
+    case "link": body = `<a class="w-link" href="${esc(cellTxt(w.url))}" target="_blank" rel="noreferrer noopener">${esc(w.title || "Open")} ↗</a>`; break;
+    case "text": body = `<div class="w-text">${esc(cellTxt(w.text))}</div>`; break;
+    case "json": body = `<pre class="w-json">${esc(JSON.stringify(coerceJson(w.value), null, 2))}</pre>`; break;
+    case "html": body = `<div class="w-html">${cellTxt(w.html)}</div>`; break;
+    case "chart": {
+      const data = chartData(w.data);
+      body = data.length ? `<div class="w-chart">${svgChart(w.chart || "bar", data)}</div>` : '<p class="muted">No chart data.</p>';
+      break;
+    }
+    case "table": default: body = tableHtml(i, w);
+  }
+  const title = w.title && w.type !== "link" ? `<div class="widget-title">${esc(w.title)}</div>` : "";
+  return `<div class="widget widget-${esc(w.type)}${size}">${title}<div class="widget-body">${body}</div></div>`;
+}
+
+function renderWidgets() {
+  $("dash-grid").innerHTML = dash.widgets.length
+    ? dash.widgets.map((w, i) => widgetHtml(w, i)).join("")
+    : '<p class="muted">No widgets — build some with self.widget(...) in the flow.</p>';
+}
+
+// ---- schedules --------------------------------------------------------------
+let schedData = [];
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+async function loadSchedules() {
+  try {
+    const res = await fetch("/api/schedules");
+    schedData = (await res.json()).schedules;
+    renderSchedules();
+  } catch (e) { console.warn(e); }
+}
+
+function renderSchedules() {
+  const tbody = $("scheds");
+  $("sched-count").textContent = `${schedData.length} schedule(s)`;
+  if (!schedData.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">no schedules yet — click "New schedule"</td></tr>';
+    return;
+  }
+  tbody.innerHTML = schedData.map(s => `
+    <tr>
+      <td><b>${esc(s.flow)}</b>${s.env ? `<span class="env-chip">${esc(s.env)}</span>` : ""}
+          <div class="rid">${s.id}</div></td>
+      <td>${I("clock", 13)} ${esc(s.when)}
+          ${Object.keys(s.inputs || {}).length ? `<div class="rid" title="${esc(JSON.stringify(s.inputs))}">custom inputs</div>` : ""}</td>
+      <td class="muted">${s.enabled ? fmtTime(s.next_run_at) : "—"}</td>
+      <td class="muted">${fmtTime(s.last_run_at)}
+          ${s.last_run_id ? `<div class="rid"><a href="/reports/${s.last_run_id}" target="_blank">${s.last_run_id}</a></div>` : ""}
+          ${s.last_error ? `<div class="sched-err" title="${esc(s.last_error)}">${esc(s.last_error)}</div>` : ""}</td>
+      <td>
+        <label class="switch"><input type="checkbox" ${s.enabled ? "checked" : ""}
+          onchange="toggleSchedule('${s.id}', this.checked)"><span></span></label>
+      </td>
+      <td>
+        <button class="iconbtn" onclick="runScheduleNow('${s.id}')" title="run now">${I("play")}</button>
+        <button class="iconbtn danger" onclick="deleteSchedule('${s.id}')" title="delete schedule">${I("trash-2")}</button>
+      </td>
+    </tr>`).join("");
+}
+
+async function toggleSchedule(id, enabled) {
+  await fetch(`/api/schedules/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  loadSchedules();
+}
+
+async function runScheduleNow(id) {
+  try {
+    const res = await fetch(`/api/schedules/${id}/run`, { method: "POST" });
+    const data = await res.json();
+    toast(res.ok ? `Started run ${data.run_id}` : `Error: ${data.detail || res.status}`);
+  } catch (e) { toast("Error: " + e); }
+  loadSchedules(); loadRuns();
+}
+
+async function deleteSchedule(id) {
+  if (!confirm("Delete this schedule?")) return;
+  await fetch(`/api/schedules/${id}`, { method: "DELETE" });
+  loadSchedules();
+}
+
+// -- schedule modal
+$("new-schedule").innerHTML = `${I("plus", 13)} New schedule`;
+$("sc-days").innerHTML = DAY_NAMES.map((d, i) =>
+  `<label><input type="checkbox" value="${i}">${d}</label>`).join("");
+
+$("sc-type").onchange = () => {
+  const daily = $("sc-type").value === "daily";
+  $("sc-interval-box").style.display = daily ? "none" : "";
+  $("sc-daily-box").style.display = daily ? "" : "none";
+};
+
+$("sc-flow").onchange = () => {
+  const f = flowsData.find(x => x.name === $("sc-flow").value);
+  $("sc-json").value = JSON.stringify((f && f.inputs) || {}, null, 2);
+};
+
+$("new-schedule").onclick = async () => {
+  if (!flowsData.length) await loadFlows();
+  $("sc-flow").innerHTML = flowsData.map(f => `<option>${esc(f.name)}</option>`).join("");
+  $("sc-flow").onchange();
+  const res = await fetch("/api/environments");
+  const envs = (await res.json()).environments;
+  $("sc-env").innerHTML = '<option value="">— none —</option>' +
+    envs.map(e => `<option value="${esc(e.name)}">${esc(e.name)}</option>`).join("");
+  $("sc-json-err").textContent = "";
+  $("sched-overlay").classList.add("show");
+};
+
+$("sc-cancel").onclick = () => $("sched-overlay").classList.remove("show");
+$("sched-overlay").onclick = (e) => {
+  if (e.target === $("sched-overlay")) $("sched-overlay").classList.remove("show");
+};
+
+$("sc-save").onclick = async () => {
+  let inputs = {};
+  try {
+    const t = $("sc-json").value.trim();
+    inputs = t ? JSON.parse(t) : {};
+    if (typeof inputs !== "object" || Array.isArray(inputs) || inputs === null)
+      throw new Error("must be a JSON object");
+  } catch (e) { $("sc-json-err").textContent = "Invalid JSON: " + e.message; return; }
+  const type = $("sc-type").value;
+  const body = {
+    flow: $("sc-flow").value,
+    type,
+    inputs,
+    env: $("sc-env").value || null,
+  };
+  if (type === "interval") body.every_minutes = parseFloat($("sc-min").value);
+  else {
+    body.time = $("sc-time").value;
+    body.days = [...$("sc-days").querySelectorAll("input:checked")].map(c => parseInt(c.value, 10));
+  }
+  try {
+    const res = await fetch("/api/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { $("sc-json-err").textContent = "Error: " + (data.detail || res.status); return; }
+    toast(`Scheduled ${body.flow} ${data.when || ""}`);
+    $("sched-overlay").classList.remove("show");
+    loadSchedules();
+  } catch (e) { $("sc-json-err").textContent = "Error: " + e; }
+};
+
 if (location.hash === "#history") switchTab("history");
+if (location.hash === "#schedules") switchTab("schedules");
+if (location.hash.startsWith("#dashboards")) {
+  switchTab("dashboards");
+  const m = location.hash.match(/^#dashboards\/(.+)$/);
+  if (m) loadFlows().then(() => openDashboard(decodeURIComponent(m[1])));
+}
 loadFlows();
 loadRuns();
+setInterval(() => {
+  if ($("tab-schedules").classList.contains("active")) loadSchedules();
+}, 10000);
 setInterval(loadRuns, 2000);   // live status refresh
 setInterval(loadFlows, 15000); // pick up new/edited workflow files
 </script>
