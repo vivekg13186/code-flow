@@ -31,6 +31,8 @@ ENVIRONMENTS_DIR = Path(os.environ.get("CODEFLOW_ENVIRONMENTS_DIR", BASE_DIR / "
 set_workflows_dir(WORKFLOWS_DIR)  # lets steps resolve self.call_workflow(...)
 set_environments_dir(ENVIRONMENTS_DIR)
 
+HISTORY_LIMIT = int(os.environ.get("CODEFLOW_HISTORY_LIMIT", "500"))
+
 app = FastAPI(title="code flow", docs_url="/api/docs")
 if (BASE_DIR / "static").is_dir():
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -42,7 +44,7 @@ def favicon():
     if icon.exists():
         return FileResponse(icon, media_type="image/png")
     raise HTTPException(404)
-store = HistoryStore(HISTORY_DIR)
+store = HistoryStore(HISTORY_DIR, limit=HISTORY_LIMIT)
 executor = ThreadPoolExecutor(max_workers=8)  # multiple flows run concurrently
 
 # in-memory live state of runs (persisted to disk on every update)
@@ -78,7 +80,13 @@ def _scheduled_launch(flow_name: str, inputs: Optional[Dict[str, Any]],
 
 SCHEDULES_FILE = Path(os.environ.get("CODEFLOW_SCHEDULES_FILE",
                                      HISTORY_DIR / "schedules.json"))
-scheduler = Scheduler(SCHEDULES_FILE, _scheduled_launch)
+def _run_is_active(run_id: str) -> bool:
+    with _runs_lock:
+        rec = _live_runs.get(run_id)
+    return bool(rec and rec.get("status") == "RUNNING")
+
+
+scheduler = Scheduler(SCHEDULES_FILE, _scheduled_launch, is_running=_run_is_active)
 
 
 # ----------------------------------------------------------------- helpers

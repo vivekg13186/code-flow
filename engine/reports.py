@@ -29,10 +29,12 @@ STATUS_COLORS = {
 
 
 class HistoryStore:
-    def __init__(self, folder: str | Path):
+    def __init__(self, folder: str | Path, limit: int = 500):
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.index_file = self.folder / "index.json"
+        #: retention: keep at most this many runs (oldest finished are pruned)
+        self.limit = max(0, int(limit))
 
     # ---------------------------------------------------------------- store
     def save_run(self, record: RunRecord) -> Path:
@@ -60,6 +62,21 @@ class HistoryStore:
             }
             index = [e for e in index if e["run_id"] != record.run_id]
             index.insert(0, entry)
+            # retention: prune the oldest finished runs beyond the limit
+            # (index is newest-first; RUNNING entries are never pruned)
+            if self.limit and len(index) > self.limit:
+                keep: list = []
+                over = len(index) - self.limit
+                for e in reversed(index):  # oldest first
+                    if over > 0 and e.get("status") != "RUNNING":
+                        over -= 1
+                        for suffix in (".json", ".html"):
+                            p = self.folder / f"{e['run_id']}{suffix}"
+                            if p.exists():
+                                p.unlink()
+                    else:
+                        keep.append(e)
+                index = list(reversed(keep))
             self.index_file.write_text(
                 json.dumps(index, indent=2, default=str), encoding="utf-8"
             )

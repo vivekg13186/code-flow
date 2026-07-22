@@ -34,9 +34,12 @@ def _parse(ts: Optional[str]) -> Optional[datetime]:
 
 
 class Scheduler:
-    def __init__(self, file: str | Path, launcher: Launcher, start_thread: bool = True):
+    def __init__(self, file: str | Path, launcher: Launcher, start_thread: bool = True,
+                 is_running: Optional[Callable[[str], bool]] = None):
         self.file = Path(file)
         self.launcher = launcher
+        #: overlap guard — callback that reports whether a run is still active
+        self.is_running = is_running or (lambda run_id: False)
         self._lock = threading.Lock()
         self._schedules: List[Dict[str, Any]] = []
         self._load()
@@ -203,8 +206,13 @@ class Scheduler:
                     continue
                 anchor = _parse(s.get("last_run_at")) or _parse(s.get("created_at"))
                 nxt = self._next_after(s, anchor) if anchor else None
-                if nxt and nxt <= now:
-                    due.append(s["id"])
+                if not (nxt and nxt <= now):
+                    continue
+                # overlap guard: previous run of this schedule still going —
+                # skip this fire and try again next tick
+                if s.get("last_run_id") and self.is_running(s["last_run_id"]):
+                    continue
+                due.append(s["id"])
         for sid in due:
             try:
                 self.fire(sid)

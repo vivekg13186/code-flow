@@ -234,6 +234,12 @@ The **Schedules** tab lets you run flows automatically:
 - schedules persist in `history/schedules.json` (so the Docker history
   volume keeps them); if the server was down when a schedule was due, it
   fires once at startup, not once per missed period
+- **overlap guard**: if the previous run of a schedule is still RUNNING when
+  the next fire is due, the fire is skipped and retried next tick — slow
+  flows never stack up concurrent runs (manual ▶ run-now is not guarded)
+- **history retention**: only the newest `CODEFLOW_HISTORY_LIMIT` runs are
+  kept (default 500); older finished runs and their reports are pruned
+  automatically, RUNNING entries never
 - API: `GET/POST /api/schedules`, `PATCH/DELETE /api/schedules/{id}`,
   `POST /api/schedules/{id}/run`
 
