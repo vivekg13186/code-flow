@@ -62,6 +62,12 @@ context — bare names are ctx keys:
   into ctx mid-loop doesn't extend the iteration.
 - Loop results are auto-collected in `ctx["<Step>_results"]`; remember the
   last iteration's returned keys also sit merged in ctx.
+- **`parallel=N` changes the rules**: iterations run concurrently on
+  context *snapshots*, so running accumulators
+  (`return {"total": ctx["total"] + n}`) silently lose updates. Return
+  per-item results and aggregate from `<Step>_results` in the next step.
+  Keep `parallel` for I/O-bound work (APIs, files); it won't speed up
+  CPU-bound Python.
 
 ## Failure design (the important one)
 

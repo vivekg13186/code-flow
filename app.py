@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -266,6 +266,44 @@ def run_detail(run_id: str):
     if json_path.exists():
         return JSONResponse(content=__import__("json").loads(json_path.read_text()))
     raise HTTPException(404, "Run not found")
+
+
+# ------------------------------------------------------------------- hooks
+@app.post("/api/hooks/{flow_name}")
+def webhook_trigger(flow_name: str, body: Optional[Dict[str, Any]] = None,
+                    env: Optional[str] = None, token: Optional[str] = None,
+                    x_webhook_token: Optional[str] = Header(None)):
+    """Start a flow from an external system. The flow must opt in with
+    ``webhook = True``. The JSON body becomes the run's inputs (or use
+    {"inputs": {...}, "env": "prod"}). Token: per-flow ``webhook_token``
+    attr, else the CODEFLOW_WEBHOOK_TOKEN env var, else open. Pass it as
+    the X-Webhook-Token header or ?token= query param."""
+    registry, _ = _get_registry()
+    cls = registry.get(flow_name)
+    if cls is None or not getattr(cls, "webhook", False):
+        raise HTTPException(404, "No such webhook")
+
+    expected = getattr(cls, "webhook_token", None) or os.environ.get("CODEFLOW_WEBHOOK_TOKEN")
+    if expected and (x_webhook_token or token) != expected:
+        raise HTTPException(401, "Invalid webhook token")
+
+    body = body or {}
+    if "inputs" in body or "env" in body:
+        inputs, env_name = body.get("inputs") or {}, body.get("env") or env
+    else:
+        inputs, env_name = body, env
+
+    env_values = None
+    if env_name:
+        envs, _ = load_environments(ENVIRONMENTS_DIR)
+        if env_name not in envs:
+            raise HTTPException(404, f"Unknown environment: {env_name}")
+        env_values = envs[env_name]
+
+    run_id = _launch(cls, inputs, env=env_values, env_name=env_name)
+    if not run_id:
+        raise HTTPException(500, "Workflow failed to start")
+    return {"run_id": run_id, "workflow": flow_name, "environment": env_name}
 
 
 # --------------------------------------------------------------- dashboards

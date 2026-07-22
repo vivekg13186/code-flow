@@ -132,6 +132,8 @@ class MyFlow(Workflow):
 | `loop`        | `"i in items"` — runs the step once per element with `ctx["i"]` set |
 | `retry`       | Number of retries after failure (total attempts = retry + 1)       |
 | `retry_delay` | Seconds to wait between attempts                                   |
+| `retry_backoff` | Multiplier applied to the delay each further attempt (exponential backoff): `retry_delay=2, retry_backoff=3` waits 2s, 6s, 18s… Default 1 = fixed |
+| `parallel`    | For `loop=` steps: run up to N iterations concurrently. Results stay input-ordered in `<Step>_results`; each iteration sees a context snapshot — aggregate from `<Step>_results`, don't use running accumulators |
 | `retry_on`    | Exception class or tuple that is retryable, e.g. `retry_on=(ConnectionError, TimeoutError)`. Other exception types fail the step immediately. Default: everything is retryable |
 | `continue_on_error` | If the step still fails after all attempts, mark it FAILED but continue with `next` instead of aborting the run. The error lands in `ctx["<StepName>_error"]` |
 | `timeout`     | Max seconds per attempt. On expiry the attempt fails with `StepTimeoutError` (a `TimeoutError` subclass — combine with `retry_on=TimeoutError`). The timed-out call is abandoned, not killed — write such steps to be duplicate-safe |
@@ -221,6 +223,28 @@ dependency-free inline SVG. Dashboard refreshes are **transient** — they
 don't create history entries (auto-refresh would flood it); use the normal
 Run button for a persisted snapshot with a report. Deep-link a dashboard
 with `/#dashboards/<FlowName>`. See `workflows/examples/OpsDashboard.py`.
+
+### Webhook triggers
+
+Let external systems start a flow. Opt in on the class:
+
+```python
+class DeployFlow(Workflow):
+    webhook = True
+    # webhook_token = "s3cret"   # optional per-flow secret
+```
+
+```bash
+curl -X POST localhost:8000/api/hooks/DeployFlow \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Token: s3cret" \
+  -d '{"version": "1.4.2"}'          # body = inputs; ?env=prod also works
+# -> {"run_id": "…", "workflow": "DeployFlow"}
+```
+
+Auth: the flow's `webhook_token` if set, else the `CODEFLOW_WEBHOOK_TOKEN`
+env var if set, else open (fine on localhost). Flows without
+`webhook = True` return 404. Runs land in the history like any other.
 
 ### Scheduler
 

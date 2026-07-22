@@ -166,6 +166,24 @@ Response: `{ "deleted": 42 }`.
 The run's standalone HTML report (also served live while the run is in
 progress). Not JSON — this is the human-readable page linked from the UI.
 
+### `POST /api/hooks/{flow_name}`
+
+Webhook trigger for external systems. The flow must set `webhook = True`
+(others return 404). Body = inputs directly, or `{"inputs": {...}, "env": "prod"}`;
+`?env=` query param also works.
+
+Auth: if the flow sets `webhook_token` (or the server sets
+`CODEFLOW_WEBHOOK_TOKEN`), pass it via `X-Webhook-Token` header or
+`?token=`; wrong/missing token → `401`.
+
+```bash
+curl -X POST "localhost:8000/api/hooks/ParallelFetchFlow?env=dev" \
+  -H "Content-Type: application/json" -d '{"count": 6}'
+```
+
+Response `200`: `{ "run_id": "…", "workflow": "ParallelFetchFlow", "environment": "dev" }`
+— the run is asynchronous and appears in the history like any other.
+
 ---
 
 ## Environments
@@ -293,4 +311,5 @@ Response: `{ "run_id": "…" }`; the schedule's `last_run_*` fields update.
 | `CODEFLOW_HISTORY_DIR` | `./history` | Reports, records, schedules |
 | `CODEFLOW_SCHEDULES_FILE` | `<history>/schedules.json` | Schedule store |
 | `CODEFLOW_HISTORY_LIMIT` | `500` | Max runs kept (oldest finished pruned) |
+| `CODEFLOW_WEBHOOK_TOKEN` | *(unset)* | Global token required by `/api/hooks/*` (per-flow `webhook_token` overrides) |
 | `CODEFLOW_HOST` / `CODEFLOW_PORT` | `127.0.0.1` / `8000` | Bind address |

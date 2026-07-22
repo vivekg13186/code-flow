@@ -558,7 +558,8 @@ function renderFlows() {
       return `<span class="${cls}" title="${s.condition || s.loop || (s.retry ? 'retry x' + s.retry : '')}">${s.name}${extra}</span>`;
     }).join("");
     const tagChips = (f.tags || []).map(t =>
-      `<span class="tag" data-tag="${t}" title="filter by tag '${t}'">${t}</span>`).join("");
+      `<span class="tag" data-tag="${t}" title="filter by tag '${t}'">${t}</span>`).join("")
+      + (f.webhook ? `<span class="env-chip" title="POST /api/hooks/${f.name}">webhook</span>` : "");
     const div = document.createElement("div");
     div.className = "card flow";
     div.innerHTML = `

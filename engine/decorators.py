@@ -28,9 +28,11 @@ def _attach_meta(
     loop: Optional[str],
     retry: int,
     retry_delay: float,
+    retry_backoff: float,
     retry_on: ExcTypes,
     continue_on_error: bool,
     timeout: Optional[float],
+    parallel: int,
     is_start: bool,
 ) -> Callable:
     @functools.wraps(func)
@@ -44,6 +46,8 @@ def _attach_meta(
         "loop": loop,
         "retry": int(retry or 0),
         "retry_delay": float(retry_delay or 0),
+        "retry_backoff": max(1.0, float(retry_backoff or 1)),
+        "parallel": max(1, int(parallel or 1)),
         "retry_on": _normalize_retry_on(retry_on),
         "continue_on_error": bool(continue_on_error),
         "timeout": float(timeout) if timeout else None,
@@ -59,6 +63,7 @@ def start(
     name: Optional[str] = None,
     retry: int = 0,
     retry_delay: float = 0,
+    retry_backoff: float = 1,
     retry_on: ExcTypes = None,
     continue_on_error: bool = False,
     timeout: Optional[float] = None,
@@ -77,9 +82,11 @@ def start(
             loop=None,
             retry=retry,
             retry_delay=retry_delay,
+            retry_backoff=retry_backoff,
             retry_on=retry_on,
             continue_on_error=continue_on_error,
             timeout=timeout,
+            parallel=1,
             is_start=True,
         )
 
@@ -93,9 +100,11 @@ def step(
     loop: Optional[str] = None,
     retry: int = 0,
     retry_delay: float = 0,
+    retry_backoff: float = 1,
     retry_on: ExcTypes = None,
     continue_on_error: bool = False,
     timeout: Optional[float] = None,
+    parallel: int = 1,
 ):
     """Mark a workflow step.
 
@@ -113,6 +122,16 @@ def step(
                  the step once per element with ``ctx["i"]`` bound.
     retry:       number of retries after a failure (total attempts = retry+1).
     retry_delay: seconds to sleep between attempts.
+    retry_backoff:
+                 multiplier applied to retry_delay for each further attempt
+                 (exponential backoff). retry_delay=2, retry_backoff=3 waits
+                 2s, 6s, 18s, ... Default 1 = fixed delay.
+    parallel:    for loop= steps only — run up to N iterations concurrently
+                 on threads. Results are still collected in input order in
+                 ctx["<Step>_results"]. Each iteration sees a snapshot of the
+                 context; do NOT use running accumulators
+                 (ctx["total"] + n) with parallel — aggregate from
+                 <Step>_results in the next step instead.
     retry_on:    exception class or tuple of classes that are retryable, e.g.
                  ``retry_on=(ConnectionError, TimeoutError)``. Any other
                  exception fails the step immediately without retrying.
@@ -138,9 +157,11 @@ def step(
             loop=loop,
             retry=retry,
             retry_delay=retry_delay,
+            retry_backoff=retry_backoff,
             retry_on=retry_on,
             continue_on_error=continue_on_error,
             timeout=timeout,
+            parallel=parallel,
             is_start=False,
         )
 

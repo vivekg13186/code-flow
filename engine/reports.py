@@ -203,7 +203,9 @@ def render_report(run: Dict[str, Any]) -> str:
         if s.get("loop"):
             detail_rows.append(
                 f"<tr><td class='k'>loop</td><td><code>{html.escape(s['loop'])}</code>"
-                f" — {s.get('iterations', 0)} iteration(s)</td></tr>"
+                f" — {s.get('iterations', 0)} iteration(s)"
+                + (f", parallel={s['parallel']}" if s.get("parallel", 1) > 1 else "")
+                + "</td></tr>"
             )
         if s.get("max_attempts", 1) > 1 or s.get("attempts", 0) > 1:
             detail_rows.append(

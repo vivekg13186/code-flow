@@ -71,6 +71,7 @@ class StepRecord:
     iterations: int = 0
     attempts: int = 0
     max_attempts: int = 1
+    parallel: int = 1
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     duration_ms: Optional[float] = None
@@ -129,6 +130,7 @@ class WorkflowRunner:
         self.env_name = env_name
         # cooperative cancellation flag; sub-workflows share the parent's
         self.cancel_event = cancel_event if cancel_event is not None else threading.Event()
+        self._rec_lock = threading.Lock()  # guards step counters in parallel loops
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunRecord:
@@ -235,6 +237,7 @@ class WorkflowRunner:
             condition=meta.get("condition"),
             loop=meta.get("loop"),
             max_attempts=meta.get("retry", 0) + 1,
+            parallel=meta.get("parallel", 1),
         )
 
     def _execute_step(self, wf: Workflow, meta: Dict[str, Any],
@@ -263,14 +266,19 @@ class WorkflowRunner:
             if meta.get("loop"):
                 var, iterable_expr = _parse_loop(meta["loop"])
                 iterable = _eval_expr(iterable_expr, wf.ctx)
-                results = []
-                for item in iterable:
-                    self._check_cancelled()
-                    wf.ctx[var] = item
-                    rec.iterations += 1
-                    res = self._call_with_retry(wf, func, meta, rec)
-                    results.append(res)
-                    self._merge_result(wf, res)
+                workers = int(meta.get("parallel", 1))
+                if workers > 1:
+                    results = self._run_loop_parallel(wf, func, meta, rec, var,
+                                                      list(iterable), workers)
+                else:
+                    results = []
+                    for item in iterable:
+                        self._check_cancelled()
+                        wf.ctx[var] = item
+                        rec.iterations += 1
+                        res = self._call_with_retry(wf, func, meta, rec)
+                        results.append(res)
+                        self._merge_result(wf, res)
                 rec.result = _short_repr(results)
                 wf.ctx[f"{_ctx_key(meta['name'])}_results"] = results
             else:
@@ -301,18 +309,51 @@ class WorkflowRunner:
             rec.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             wf._logger = None
 
+    def _run_loop_parallel(self, wf: Workflow, func, meta: Dict[str, Any],
+                           rec: StepRecord, var: str, items: List[Any],
+                           workers: int) -> List[Any]:
+        """Run loop iterations concurrently. Each iteration gets a snapshot
+        of the context with the loop variable bound; results come back in
+        input order. Any iteration exhausting its retries fails the step."""
+        results: List[Any] = [None] * len(items)
+        rec.logs.append(f"{_now()}  running {len(items)} iteration(s) with parallel={workers}")
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="codeflow-loop") as pool:
+            futures = {}
+            for idx, item in enumerate(items):
+                self._check_cancelled()
+                ictx = dict(wf.ctx)
+                ictx[var] = item
+                futures[pool.submit(self._call_with_retry, wf, func, meta, rec, ictx)] = idx
+            try:
+                for fut in concurrent.futures.as_completed(futures):
+                    results[futures[fut]] = fut.result()  # re-raises iteration failure
+                    with self._rec_lock:
+                        rec.iterations += 1
+            except BaseException:
+                for f in futures:
+                    f.cancel()  # un-started iterations are dropped
+                raise
+        # merge in input order so precedence is deterministic
+        for res in results:
+            self._merge_result(wf, res)
+        wf.ctx[var] = items[-1] if items else None
+        return results
+
     def _call_with_retry(self, wf: Workflow, func, meta: Dict[str, Any],
-                         rec: StepRecord) -> Any:
+                         rec: StepRecord, ctx: Optional[Dict[str, Any]] = None) -> Any:
         retries = meta.get("retry", 0)
-        delay = meta.get("retry_delay", 0)
+        base_delay = meta.get("retry_delay", 0)
+        backoff = meta.get("retry_backoff", 1) or 1
         retry_on = meta.get("retry_on")  # None = everything is retryable
         timeout = meta.get("timeout")
         last_exc: Optional[Exception] = None
         for attempt in range(1, retries + 2):
             self._check_cancelled()
-            rec.attempts += 1
+            with self._rec_lock:
+                rec.attempts += 1
             try:
-                return self._call(wf, func, timeout)
+                return self._call(wf, func, timeout, ctx)
             except Exception as exc:  # noqa: BLE001 - reported in record
                 last_exc = exc
                 rec.logs.append(
@@ -325,7 +366,10 @@ class WorkflowRunner:
                         f"({', '.join(c.__name__ for c in retry_on)}) — failing immediately"
                     )
                     raise
-                if attempt <= retries and delay:
+                if attempt <= retries and base_delay:
+                    delay = base_delay * (backoff ** (attempt - 1))
+                    if backoff > 1:
+                        rec.logs.append(f"{_now()}  backing off {round(delay, 2)}s")
                     # sleep in small slices so cancellation stays responsive
                     deadline = time.monotonic() + delay
                     while time.monotonic() < deadline:
@@ -333,7 +377,8 @@ class WorkflowRunner:
                         time.sleep(min(CANCEL_POLL_SECONDS, deadline - time.monotonic()))
         raise last_exc  # type: ignore[misc]
 
-    def _call(self, wf: Workflow, func, timeout: Optional[float] = None) -> Any:
+    def _call(self, wf: Workflow, func, timeout: Optional[float] = None,
+              ctx: Optional[Dict[str, Any]] = None) -> Any:
         """Call a step method (with or without the ctx argument), enforcing
         timeout= and staying responsive to cancellation.
 
@@ -341,8 +386,9 @@ class WorkflowRunner:
         A timed-out or cancelled call is ABANDONED (Python threads cannot be
         killed) — it may keep running in the background, but the flow moves
         on. Steps with timeouts should therefore be safe to duplicate."""
+        use_ctx = ctx if ctx is not None else wf.ctx
         sig = inspect.signature(func)
-        call = (lambda: func(wf.ctx)) if len(sig.parameters) >= 1 else func
+        call = (lambda: func(use_ctx)) if len(sig.parameters) >= 1 else func
 
         if timeout is None and not self.cancel_event.is_set():
             # fast path — still cancellable at step boundaries

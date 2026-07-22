@@ -32,6 +32,11 @@ class Workflow:
     #: True marks this flow as a dashboard — it appears in the Dashboards tab
     #: and its steps build widgets via self.widget(...)
     dashboard: bool = False
+    #: True allows this flow to be started via POST /api/hooks/<FlowName>
+    #: (explicit opt-in). Optionally set webhook_token to require a secret;
+    #: otherwise the global CODEFLOW_WEBHOOK_TOKEN env var applies if set.
+    webhook: bool = False
+    webhook_token: Optional[str] = None
     #: tags used to group/filter workflows and their runs in the UI
     tags: List[str] = []
     #: default inputs (may be overridden per-run)
