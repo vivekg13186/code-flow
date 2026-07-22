@@ -89,13 +89,35 @@
                padding:9px 22px; font-size:14px; font-weight:600; cursor:pointer; }
   button.run:hover { filter:brightness(1.1); }
   button.run:disabled { opacity:.5; cursor:wait; }
-  table { width:100%; border-collapse:collapse; font-size:13.5px; }
-  th { text-align:left; color:var(--muted); font-weight:600; font-size:12px;
-       padding:6px 10px; border-bottom:1px solid var(--border); }
-  td { padding:8px 10px; border-bottom:1px solid #f3f4f6; }
+  button.run svg, button.view svg, .filterbar button svg { vertical-align:-2px; margin-right:5px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; table-layout:fixed; }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:11px;
+       text-transform:uppercase; letter-spacing:.04em;
+       padding:8px 10px; border-bottom:1px solid var(--border); }
+  td { padding:9px 10px; border-bottom:1px solid #f3f4f6; vertical-align:top;
+       overflow:hidden; }
   tr:hover td { background:#fafafa; }
-  .badge { padding:2px 10px; border-radius:999px; font-size:11.5px; font-weight:700;
-           color:#fff; display:inline-block; }
+  tr.selrow td { background:#eef2ff66; }
+  th.chk, td.chk { width:34px; text-align:center; }
+  td.chk input, th.chk input { accent-color: var(--accent); cursor:pointer; }
+  th.c-status { width:190px; } th.c-time { width:150px; }
+  th.c-dur { width:80px; } th.c-steps { width:56px; } th.c-acts { width:96px; }
+  td .rid { color:var(--muted); font-size:11px; font-family:ui-monospace,Menlo,monospace;
+            margin-top:2px; }
+  .err-msg { color:#b91c1c; font-size:11.5px; margin-top:3px; white-space:nowrap;
+             overflow:hidden; text-overflow:ellipsis; max-width:100%; cursor:help; }
+  .badge { padding:2px 9px; border-radius:999px; font-size:11px; font-weight:700;
+           color:#fff; display:inline-flex; align-items:center; gap:4px;
+           max-width:100%; }
+  .badge svg { flex:none; }
+  .iconbtn { background:none; border:none; cursor:pointer; color:var(--muted);
+             padding:5px; border-radius:7px; display:inline-flex; align-items:center;
+             text-decoration:none !important; }
+  .iconbtn:hover { background:#f3f4f6; color:#111827; }
+  .iconbtn.danger:hover { background:#fef2f2; color:var(--red); }
+  .iconbtn.warn:hover { background:#fffbeb; color:#d97706; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1.2s linear infinite; }
   .SUCCESS { background:var(--green); } .FAILED { background:var(--red); }
   .RUNNING { background:var(--blue); animation:pulse 1.2s infinite; }
   .CANCELLED { background:#d97706; } .INTERRUPTED { background:#7c3aed; }
@@ -191,7 +213,8 @@
     <label style="font-size:12.5px;color:var(--muted)">
       <input type="checkbox" id="f-subs" checked style="width:auto"> show sub-runs
     </label>
-    <button class="ghost danger" id="clear-history" title="delete all finished runs">🗑 clear history</button>
+    <button class="ghost danger" id="del-selected" style="display:none"></button>
+    <button class="ghost danger" id="clear-history" title="delete all finished runs"></button>
     <select id="f-pagesize" title="rows per page">
       <option value="10">10 / page</option>
       <option value="20" selected>20 / page</option>
@@ -203,10 +226,11 @@
   <div class="card" style="padding:6px 8px">
     <table>
       <thead><tr>
-        <th>Workflow</th><th>Status</th><th>Started</th><th>Duration</th>
-        <th>Steps</th><th>Report</th>
+        <th class="chk"><input type="checkbox" id="sel-all" title="select page"></th>
+        <th>Workflow</th><th class="c-status">Status</th><th class="c-time">Started</th>
+        <th class="c-dur">Duration</th><th class="c-steps">Steps</th><th class="c-acts">Actions</th>
       </tr></thead>
-      <tbody id="runs"><tr><td colspan="6" class="empty">no runs yet</td></tr></tbody>
+      <tbody id="runs"><tr><td colspan="7" class="empty">no runs yet</td></tr></tbody>
     </table>
   </div>
   <div class="pager" id="runs-pager"></div>
@@ -245,6 +269,30 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+
+// ---- lucide icons (https://lucide.dev, ISC) inlined — no CDN needed --------
+const LUCIDE = {
+  "play": '<polygon points="6 3 20 12 6 21 6 3"/>',
+  "git-branch": '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  "file-text": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  "trash-2": '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+  "square": '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+  "check": '<path d="M20 6 9 17l-5-5"/>',
+  "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  "loader-circle": '<path d="M21 12a9 9 0 1 1-6.219-8.56"/>',
+  "ban": '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+};
+function I(name, size = 15, cls = "") {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="${cls}">${LUCIDE[name] || ""}</svg>`;
+}
+const STATUS_ICON = {
+  SUCCESS: () => I("check", 12),
+  FAILED: () => I("x", 12),
+  RUNNING: () => I("loader-circle", 12, "spin"),
+  CANCELLED: () => I("ban", 12),
+  INTERRUPTED: () => I("triangle-alert", 12),
+};
 
 function renderPager(elId, page, totalPages, info, onChange) {
   const el = $(elId);
@@ -356,8 +404,8 @@ function renderFlows() {
         <div class="desc">${f.description || ""}</div>
         <div class="chips">${chips}</div>
       </div>
-      <button class="view" data-view="${f.name}">⬡ Flow</button>
-      <button class="run" data-flow="${f.name}">▶ Run</button>`;
+      <button class="view" data-view="${f.name}">${I("git-branch", 13)} Flow</button>
+      <button class="run" data-flow="${f.name}">${I("play", 13)} Run</button>`;
     el.appendChild(div);
   }
   for (const e of (window.flowErrors || [])) {
@@ -380,7 +428,8 @@ function renderFlows() {
 }
 
 // ---- flow diagram (pure HTML/CSS vertical stepper) --------------------------
-const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 function stepNode(s) {
   const badges = [];
@@ -551,6 +600,18 @@ function refreshFilterOptions() {
   fill($("f-env"), [...new Set(runsData.map(r => r.environment).filter(Boolean))].sort(), "any environment");
 }
 
+const selectedRuns = new Set();
+
+function updateBulkBar() {
+  const btn = $("del-selected");
+  if (selectedRuns.size) {
+    btn.style.display = "";
+    btn.innerHTML = `${I("trash-2", 13)} delete selected (${selectedRuns.size})`;
+  } else {
+    btn.style.display = "none";
+  }
+}
+
 function renderRuns() {
   const tbody = $("runs");
   const fw = $("f-workflow").value, fs = $("f-status").value,
@@ -562,10 +623,15 @@ function renderRuns() {
     (!fe || r.environment === fe) &&
     (subs || !r.parent_run_id)
   );
+  // drop selections that no longer exist
+  const known = new Set(runsData.map(r => r.run_id));
+  for (const id of [...selectedRuns]) if (!known.has(id)) selectedRuns.delete(id);
+  updateBulkBar();
+
   $("f-count").textContent = runs.length === runsData.length
     ? `${runs.length} run(s)` : `${runs.length} of ${runsData.length} run(s)`;
   if (!runs.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">${runsData.length ? "no runs match the filters" : "no runs yet"}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">${runsData.length ? "no runs match the filters" : "no runs yet"}</td></tr>`;
     renderPager("runs-pager", 1, 1, "", () => {});
     return;
   }
@@ -574,21 +640,83 @@ function renderRuns() {
   runPage = pg.page;
   renderPager("runs-pager", pg.page, pg.totalPages, `${runs.length} run(s)`,
     p => { runPage = p; renderRuns(); });
-  tbody.innerHTML = pg.slice.map(r => `
-    <tr>
-      <td>${r.parent_run_id ? '<span class="muted" title="sub-workflow of run ' + r.parent_run_id + '">↳ </span>' : ""}<b>${r.workflow}</b> <span class="muted">${r.run_id}</span>${r.environment ? `<span class="env-chip">${r.environment}</span>` : ""}${(r.tags || []).map(t => `<span class="tag" onclick="setRunTagFilter('${t}')" title="filter history by '${t}'">${t}</span>`).join("")}</td>
-      <td><span class="badge ${r.status}">${r.status}</span>
-          ${r.error ? `<div class="muted" style="font-size:11px">${r.error}</div>` : ""}</td>
+
+  tbody.innerHTML = pg.slice.map(r => {
+    const finished = r.status !== "RUNNING";
+    const sel = selectedRuns.has(r.run_id);
+    const statusIcon = (STATUS_ICON[r.status] || (() => ""))();
+    return `
+    <tr class="${sel ? "selrow" : ""}">
+      <td class="chk"><input type="checkbox" class="rowsel" data-id="${r.run_id}"
+          ${finished ? "" : "disabled title='running — cancel first'"} ${sel ? "checked" : ""}></td>
+      <td>
+        <div>${r.parent_run_id ? `<span class="muted" title="sub-workflow of run ${r.parent_run_id}">↳ </span>` : ""}<b>${esc(r.workflow)}</b>${r.environment ? `<span class="env-chip">${esc(r.environment)}</span>` : ""}${(r.tags || []).map(t => `<span class="tag" onclick="setRunTagFilter('${esc(t)}')" title="filter history by '${esc(t)}'">${esc(t)}</span>`).join("")}</div>
+        <div class="rid">${r.run_id}</div>
+      </td>
+      <td>
+        <span class="badge ${r.status}">${statusIcon}${r.status}</span>
+        ${r.error ? `<div class="err-msg" title="${esc(r.error)}">${esc(r.error)}</div>` : ""}
+      </td>
       <td class="muted">${fmtTime(r.started_at)}</td>
       <td class="muted">${fmtDur(r.duration_ms)}</td>
       <td class="muted">${r.steps ?? "—"}</td>
-      <td><a href="/reports/${r.run_id}" target="_blank">view report</a>${
-        r.status === "RUNNING"
-          ? `<a class="cancel" onclick="cancelRun('${r.run_id}')" title="stop this run">✕ cancel</a>`
-          : `<a class="del" onclick="deleteRun('${r.run_id}')" title="delete this run from history">🗑</a>`
-      }</td>
-    </tr>`).join("");
+      <td>
+        <a class="iconbtn" href="/reports/${r.run_id}" target="_blank" title="view report">${I("file-text")}</a>
+        ${r.status === "RUNNING"
+          ? `<button class="iconbtn warn" onclick="cancelRun('${r.run_id}')" title="cancel this run">${I("square")}</button>`
+          : `<button class="iconbtn danger" onclick="deleteRun('${r.run_id}')" title="delete this run">${I("trash-2")}</button>`}
+      </td>
+    </tr>`;
+  }).join("");
+
+  // selection wiring
+  tbody.querySelectorAll(".rowsel").forEach(cb => {
+    cb.onchange = () => {
+      if (cb.checked) selectedRuns.add(cb.dataset.id);
+      else selectedRuns.delete(cb.dataset.id);
+      cb.closest("tr").classList.toggle("selrow", cb.checked);
+      updateBulkBar();
+      syncSelAll();
+    };
+  });
+  syncSelAll();
 }
+
+function syncSelAll() {
+  const boxes = [...document.querySelectorAll("#runs .rowsel:not(:disabled)")];
+  const all = $("sel-all");
+  all.checked = boxes.length > 0 && boxes.every(b => b.checked);
+  all.indeterminate = boxes.some(b => b.checked) && !all.checked;
+}
+
+$("sel-all").onchange = () => {
+  const check = $("sel-all").checked;
+  document.querySelectorAll("#runs .rowsel:not(:disabled)").forEach(cb => {
+    cb.checked = check;
+    if (check) selectedRuns.add(cb.dataset.id); else selectedRuns.delete(cb.dataset.id);
+    cb.closest("tr").classList.toggle("selrow", check);
+  });
+  updateBulkBar();
+};
+
+$("del-selected").onclick = async () => {
+  const ids = [...selectedRuns];
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} selected run(s) and their reports? This cannot be undone.`)) return;
+  try {
+    const res = await fetch("/api/runs/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_ids: ids }),
+    });
+    const data = await res.json();
+    toast(res.ok
+      ? `Deleted ${data.deleted.length} run(s)` + (data.skipped.length ? `, skipped ${data.skipped.length}` : "")
+      : `Error: ${data.detail || res.status}`);
+  } catch (e) { toast("Error: " + e); }
+  selectedRuns.clear();
+  loadRuns();
+};
 
 async function deleteRun(runId) {
   if (!confirm(`Delete run ${runId} and its report? This cannot be undone.`)) return;
@@ -599,6 +727,8 @@ async function deleteRun(runId) {
   } catch (e) { toast("Error: " + e); }
   loadRuns();
 }
+
+$("clear-history").innerHTML = `${I("trash-2", 13)} clear history`;
 
 $("clear-history").onclick = async () => {
   const finished = runsData.filter(r => r.status !== "RUNNING").length;
@@ -646,6 +776,7 @@ function setRunTagFilter(tag) {
   renderRuns();
 }
 
+if (location.hash === "#history") switchTab("history");
 loadFlows();
 loadRuns();
 setInterval(loadRuns, 2000);   // live status refresh

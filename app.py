@@ -186,6 +186,22 @@ def delete_run(run_id: str):
     return {"deleted": run_id}
 
 
+@app.post("/api/runs/bulk-delete")
+def bulk_delete_runs(body: Dict[str, Any]):
+    """Delete a set of finished runs: {"run_ids": [...]}. RUNNING runs are skipped."""
+    ids = body.get("run_ids") or []
+    deleted, skipped = [], []
+    for rid in ids:
+        with _runs_lock:
+            rec = _live_runs.get(rid)
+            if rec and rec.get("status") == "RUNNING":
+                skipped.append(rid)
+                continue
+            _live_runs.pop(rid, None)
+        (deleted if store.delete_run(rid) else skipped).append(rid)
+    return {"deleted": deleted, "skipped": skipped}
+
+
 @app.delete("/api/runs")
 def clear_history():
     """Delete all finished runs (RUNNING ones are kept)."""
