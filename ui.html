@@ -160,6 +160,20 @@
                 font-size:13px; white-space:pre-wrap; }
   .dash-card { cursor:pointer; }
   .dash-card:hover { border-color:#c7d2fe; }
+  .dash-inputs { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end;
+                 background:#fff; border:1px solid var(--border); border-radius:12px;
+                 padding:12px 16px; margin-bottom:14px; }
+  .di { min-width:130px; }
+  .di label { display:block; font-size:11px; color:var(--muted); font-weight:600;
+              margin-bottom:3px; text-transform:uppercase; letter-spacing:.03em; }
+  .di label .req { color:var(--red); }
+  .di input[type=text], .di input[type=number], .di select {
+      width:100%; padding:6px 9px; border:1px solid var(--border); border-radius:7px;
+      font-size:13px; background:#fff; }
+  .di .di-bool { display:flex; align-items:center; gap:6px; font-size:13px;
+                 padding:6px 0; }
+  .di.bad input, .di.bad select { border-color:var(--red); }
+  .di .di-err { color:var(--red); font-size:10.5px; margin-top:2px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
           padding:16px 18px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
   .flow { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
@@ -307,6 +321,7 @@
         <select id="dash-env"><option value="">env: none</option></select>
         <span class="count" id="dash-updated"></span>
       </div>
+      <div class="dash-inputs" id="dash-inputs" style="display:none"></div>
       <div class="dash-error" id="dash-error" style="display:none"></div>
       <div class="widget-grid" id="dash-grid"></div>
     </div>
@@ -1090,6 +1105,81 @@ async function renderDashList() {
     </div>`).join("");
 }
 
+// input widgets: from inputs_schema if declared, else inferred from defaults
+function dashFieldDefs(f) {
+  const schema = f.inputs_schema || {};
+  if (Object.keys(schema).length)
+    return Object.entries(schema).map(([name, spec]) => ({ name, spec }));
+  return Object.entries(f.inputs || {}).map(([name, v]) => {
+    const t = typeof v === "number" ? (Number.isInteger(v) ? "integer" : "number")
+      : typeof v === "boolean" ? "boolean"
+      : typeof v === "string" ? "string" : "json";
+    return { name, spec: { type: t, default: t === "json" ? JSON.stringify(v) : v } };
+  });
+}
+
+function renderDashInputs(f) {
+  const defs = dashFieldDefs(f);
+  const bar = $("dash-inputs");
+  dash.fields = defs;
+  if (!defs.length) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+  bar.style.display = "";
+  bar.innerHTML = defs.map(({ name, spec }) => {
+    const typ = spec.type || "string";
+    const req = spec.required ? '<span class="req">*</span>' : "";
+    const v = spec.default !== undefined && spec.default !== null ? spec.default : "";
+    let input;
+    if (typ === "boolean") {
+      input = `<div class="di-bool"><input type="checkbox" id="df-${name}" ${v === true || v === "true" ? "checked" : ""}> <span>on</span></div>`;
+    } else if (typ === "select") {
+      const opts = (spec.options || []).map(o =>
+        `<option ${String(o) === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("");
+      input = `<select id="df-${name}">${spec.required ? "" : '<option value="">—</option>'}${opts}</select>`;
+    } else if (typ === "number" || typ === "integer") {
+      input = `<input type="number" id="df-${name}" step="${typ === "integer" ? "1" : "any"}" ${spec.min !== undefined ? `min="${spec.min}"` : ""} ${spec.max !== undefined ? `max="${spec.max}"` : ""} value="${esc(String(v))}">`;
+    } else {
+      input = `<input type="text" id="df-${name}" value="${esc(typeof v === "string" ? v : JSON.stringify(v))}" ${spec.help ? `title="${esc(spec.help)}"` : ""}>`;
+    }
+    return `<div class="di" id="dibox-${name}"><label>${esc(spec.label || name)}${req}</label>${input}<div class="di-err" id="dierr-${name}"></div></div>`;
+  }).join("");
+  // pressing Enter in any input triggers a refresh
+  bar.querySelectorAll("input").forEach(el => {
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter") refreshDashboard(); });
+  });
+}
+
+function collectDashInputs() {
+  const inputs = {}, errors = {};
+  for (const { name, spec } of (dash.fields || [])) {
+    const el = $("df-" + name);
+    if (!el) continue;
+    const box = $("dibox-" + name);
+    box.classList.remove("bad"); $("dierr-" + name).textContent = "";
+    const typ = spec.type || "string";
+    let v = typ === "boolean" ? el.checked : el.value;
+    if (v === "" || v === undefined) {
+      if (spec.required && spec.default === undefined) errors[name] = "required";
+      continue;
+    }
+    if (typ === "number" || typ === "integer") {
+      const n = Number(v);
+      if (Number.isNaN(n)) { errors[name] = "must be a number"; continue; }
+      v = n;
+    } else if (typ === "json") {
+      try { v = JSON.parse(v); } catch (e) { errors[name] = "invalid JSON"; continue; }
+    }
+    inputs[name] = v;
+  }
+  return { inputs, errors };
+}
+
+function showDashFieldErrors(errors) {
+  for (const [name, msg] of Object.entries(errors)) {
+    const box = $("dibox-" + name);
+    if (box) { box.classList.add("bad"); $("dierr-" + name).textContent = msg; }
+  }
+}
+
 async function openDashboard(name) {
   dash.flow = name; dash.widgets = []; dash.sort = {};
   $("dash-list").style.display = "none";
@@ -1097,6 +1187,8 @@ async function openDashboard(name) {
   $("dash-name").textContent = name;
   $("dash-grid").innerHTML = "";
   $("dash-error").style.display = "none";
+  const f = flowsData.find(x => x.name === name);
+  renderDashInputs(f || {});
   try {
     const envs = (await (await fetch("/api/environments")).json()).environments;
     const cur = $("dash-env").value;
@@ -1109,6 +1201,8 @@ async function openDashboard(name) {
 
 async function refreshDashboard() {
   if (!dash.flow) return;
+  const collected = collectDashInputs();
+  if (Object.keys(collected.errors).length) { showDashFieldErrors(collected.errors); return; }
   const btn = $("dash-refresh");
   btn.disabled = true;
   $("dash-updated").textContent = "refreshing…";
@@ -1116,10 +1210,16 @@ async function refreshDashboard() {
     const res = await fetch(`/api/dashboards/${encodeURIComponent(dash.flow)}/render`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ env: $("dash-env").value || null }),
+      body: JSON.stringify({ inputs: collected.inputs, env: $("dash-env").value || null }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || res.status);
+    if (!res.ok) {
+      if (data.detail && data.detail.errors) {
+        showDashFieldErrors(data.detail.errors);
+        throw new Error(data.detail.message || "input validation failed");
+      }
+      throw new Error(JSON.stringify(data.detail) || res.status);
+    }
     if (data.status !== "SUCCESS") {
       const failed = (data.steps || []).filter(s => s.status === "FAILED").map(s => `${s.name}: ${s.error}`);
       $("dash-error").textContent = `Dashboard flow ${data.status}: ${data.error || ""}\n${failed.join("\n")}`;

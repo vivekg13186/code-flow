@@ -224,7 +224,10 @@ class OpsDashboard(Workflow):
 The **Dashboards** tab lists dashboard flows; opening one runs the flow and
 renders the widgets in a grid (size `"wide"` spans 2 columns, `"full"` the
 whole row). The toolbar has Refresh, auto-refresh (10s–5m), and an
-environment picker. Tables sort on click and export to CSV; charts are
+environment picker. **Input widgets**: an input bar is generated from the
+flow's `inputs_schema` (or inferred from its `inputs` defaults) — change
+the values and Refresh (or press Enter) re-runs the flow with them; typed
+validation applies and auto-refresh uses the current values too. Tables sort on click and export to CSV; charts are
 dependency-free inline SVG. Dashboard refreshes are **transient** — they
 don't create history entries (auto-refresh would flood it); use the normal
 Run button for a persisted snapshot with a report. Deep-link a dashboard

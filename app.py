@@ -330,6 +330,11 @@ def render_dashboard(flow_name: str, body: Optional[Dict[str, Any]] = None):
 
     body = body or {}
     inputs, env_name = body.get("inputs") or {}, body.get("env") or None
+
+    inputs, errors = validate_for_class(cls, inputs)
+    if errors:
+        raise HTTPException(422, {"message": "input validation failed", "errors": errors})
+
     env = None
     if env_name:
         envs, _ = load_environments(ENVIRONMENTS_DIR)

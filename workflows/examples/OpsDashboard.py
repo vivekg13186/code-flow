@@ -13,7 +13,12 @@ class OpsDashboard(Workflow):
     dashboard = True
     description = "Demo operations dashboard — metrics, charts, table"
     tags = ["demo"]
-    inputs = {"region": "EU"}
+    inputs = {"region": "EU", "top_customers": 5}
+    inputs_schema = {
+        "region": {"type": "select", "options": ["EU", "US", "APAC"], "default": "EU"},
+        "top_customers": {"type": "integer", "min": 1, "max": 10, "default": 5,
+                          "help": "rows in the recent-orders table"},
+    }
 
     @start(next="Collect")
     def begin(self, ctx):
@@ -38,7 +43,9 @@ class OpsDashboard(Workflow):
             "recent": [
                 {"order": f"#{1000 + i}", "customer": c, "amount": rnd.randint(20, 400),
                  "status": rnd.choice(["paid", "pending", "shipped"])}
-                for i, c in enumerate(["ACME Corp", "Globex", "Initech", "Umbrella", "Stark"])
+                for i, c in enumerate(["ACME Corp", "Globex", "Initech", "Umbrella",
+                                       "Stark", "Wayne", "Wonka", "Tyrell", "Hooli",
+                                       "Aperture"][: ctx["top_customers"]])
             ],
         }
 
