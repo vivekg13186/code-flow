@@ -4,9 +4,9 @@ A tiny **annotation-based workflow engine** in Python with a web UI.
 
 ## Demo
 
-![code flow demo](docs/code-flow-demo.gif)
+[![code flow demo](docs/code-flow-demo.gif)](https://vimeo.com/1212565346)
 
-*(5× speed preview — [full-quality video](docs/code-flow-demo.mov))*
+*(5× speed preview — click for the [full demo on Vimeo](https://vimeo.com/1212565346))*
 
 ## Why code-flow
 
