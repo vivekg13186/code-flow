@@ -148,6 +148,12 @@
                 white-space:nowrap; padding:6px 8px; }
   .w-table td { padding:5px 8px; border-bottom:1px solid #f3f4f6; }
   .w-table-toolbar { display:flex; justify-content:flex-end; margin-bottom:6px; }
+  /* conditional cell formatting */
+  td.cf-ok   { background:#f0fdf4; color:#166534; font-weight:600; }
+  td.cf-warn { background:#fffbeb; color:#b45309; font-weight:600; }
+  td.cf-err  { background:#fef2f2; color:#b91c1c; font-weight:600; }
+  td.cf-info { background:#eff6ff; color:#1d4ed8; font-weight:600; }
+  td.cf-muted{ color:#9ca3af; }
   .w-csv-btn { border:1px solid var(--border); background:#fff; border-radius:6px;
                font-size:11px; padding:3px 9px; cursor:pointer; color:#374151; }
   .w-csv-btn:hover { background:#f9fafb; }
@@ -1341,9 +1347,35 @@ function asRows(input) {
   return v.map(r => (r && typeof r === "object" && !Array.isArray(r)) ? r : { value: r });
 }
 
+// conditional cell formatting: first matching rule wins.
+// rule: {col, style} + one of eq/ne/gt/gte/lt/lte/contains, or {col, map:{value:style}}
+function cellFormat(rules, col, value) {
+  for (const r of rules || []) {
+    if (r.col !== col) continue;
+    if (r.map) {
+      const s = r.map[String(value)];
+      if (s) return s;
+      continue;
+    }
+    const num = Number(value);
+    const isNum = !Number.isNaN(num) && value !== "" && value !== null;
+    let hit = false;
+    if ("eq" in r) hit = String(value) === String(r.eq);
+    else if ("ne" in r) hit = String(value) !== String(r.ne);
+    else if ("gt" in r) hit = isNum && num > r.gt;
+    else if ("gte" in r) hit = isNum && num >= r.gte;
+    else if ("lt" in r) hit = isNum && num < r.lt;
+    else if ("lte" in r) hit = isNum && num <= r.lte;
+    else if ("contains" in r) hit = String(value ?? "").toLowerCase().includes(String(r.contains).toLowerCase());
+    if (hit) return r.style || "warn";
+  }
+  return null;
+}
+
 function tableHtml(wIdx, w) {
   const rows = asRows(w.rows);
   if (!rows.length) return '<p class="muted">No rows.</p>';
+  const fmt = Array.isArray(w.format) ? w.format : [];
   const cols = [...new Set(rows.slice(0, 50).flatMap(r => Object.keys(r)))];
   const st = dash.sort[wIdx];
   let sorted = rows;
@@ -1361,7 +1393,10 @@ function tableHtml(wIdx, w) {
       <thead><tr>${cols.map(c =>
         `<th onclick="dashSort(${wIdx},'${esc(c)}')">${esc(c)} ${st && st.col === c ? (st.dir === 1 ? "▲" : "▼") : ""}</th>`).join("")}</tr></thead>
       <tbody>${sorted.map(r =>
-        `<tr>${cols.map(c => `<td>${esc(cellTxt(r[c]))}</td>`).join("")}</tr>`).join("")}</tbody>
+        `<tr>${cols.map(c => {
+          const cf = cellFormat(fmt, c, r[c]);
+          return `<td${cf ? ` class="cf-${esc(cf)}"` : ""}>${esc(cellTxt(r[c]))}</td>`;
+        }).join("")}</tr>`).join("")}</tbody>
     </table></div>`;
 }
 

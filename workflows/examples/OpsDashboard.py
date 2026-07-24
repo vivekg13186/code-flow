@@ -70,5 +70,13 @@ class OpsDashboard(Workflow):
             self.widget("alert", text="Daily quota nearly exhausted", level="warn")
 
         self.widget("section", title="Recent orders")
-        self.widget("table", rows=ctx["recent"], title="Recent orders", size="full")
+        self.widget("table", rows=ctx["recent"], title="Recent orders", size="full",
+                    format=[
+                        # map: value -> style (ok | warn | err | info | muted)
+                        {"col": "status", "map": {"paid": "ok", "pending": "warn",
+                                                  "shipped": "info"}},
+                        # comparison rules: first match wins
+                        {"col": "amount", "gt": 300, "style": "err"},
+                        {"col": "amount", "lt": 50, "style": "muted"},
+                    ])
         self.outputs({"orders": ctx["orders"], "revenue": ctx["revenue"]})

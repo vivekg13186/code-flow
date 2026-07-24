@@ -76,7 +76,11 @@ class Workflow:
             self.widget("progress", title="Quota", value=64, max=100)
             self.widget("chart", title="Sales", chart="bar",
                         data={"Books": 850, "Games": 1200}, size="wide")
-            self.widget("table", title="Orders", rows=[{...}, ...], size="full")
+            self.widget("table", title="Orders", rows=[{...}, ...], size="full",
+                        format=[  # optional conditional cell formatting
+                            {"col": "status", "map": {"paid": "ok", "failed": "err"}},
+                            {"col": "amount", "gt": 300, "style": "err"},
+                        ])
             self.widget("list", items=[...]);  self.widget("alert", text="…", level="warn")
             self.widget("text", text="…");     self.widget("json", value={...})
             self.widget("section", title="Overview")   # full-width divider
