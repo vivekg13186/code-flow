@@ -569,7 +569,8 @@ function renderFlows() {
   for (const f of pg.slice) {
     const chips = f.steps.map(s => {
       let cls = "chip", extra = "";
-      if (s.condition) { cls += " cond"; extra = " ?"; }
+      if (s.wait_seconds != null) { extra = " ⏳" + s.wait_seconds; }
+      else if (s.condition) { cls += " cond"; extra = " ?"; }
       else if (s.loop) { cls += " loop"; extra = " ⟳"; }
       else if (s.retry > 0) { cls += " retry"; extra = " ↻" + s.retry; }
       return `<span class="${cls}" title="${s.condition || s.loop || (s.retry ? 'retry x' + s.retry : '')}">${s.name}${extra}</span>`;
@@ -614,6 +615,7 @@ const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
 
 function stepNode(s) {
   const badges = [];
+  if (s.wait_seconds != null) badges.push(`<span class="sb tmo">⏳ wait ${esc(String(s.wait_seconds))}s</span>`);
   if (s.condition) badges.push(`<span class="sb cond">if ${esc(s.condition)}</span>`);
   if (s.loop) badges.push(`<span class="sb loop">for ${esc(s.loop)}</span>`);
   if (s.retry) badges.push(`<span class="sb retry">retry ${s.retry}x${s.retry_delay ? " / " + s.retry_delay + "s" : ""}${s.retry_on ? " on " + esc(s.retry_on.join(", ")) : ""}</span>`);

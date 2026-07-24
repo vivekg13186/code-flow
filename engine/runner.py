@@ -79,6 +79,7 @@ class StepRecord:
     error: Optional[str] = None
     traceback: Optional[str] = None
     continued: bool = False   # failed but flow continued (continue_on_error)
+    waited_s: Optional[float] = None  # @wait steps: how long the pause was
     logs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -279,9 +280,11 @@ class WorkflowRunner:
             rec.status = "RUNNING"
             func = getattr(wf, meta["func_name"])
 
-            # -- loop or single execution --------------------------------
+            # -- wait / loop / single execution --------------------------
             override_next: Optional[str] = None
-            if meta.get("loop"):
+            if meta.get("is_wait"):
+                self._run_wait(wf, func, meta, rec)
+            elif meta.get("loop"):
                 var, iterable_expr = _parse_loop(meta["loop"])
                 iterable = _eval_expr(iterable_expr, wf.ctx)
                 workers = int(meta.get("parallel", 1))
@@ -326,6 +329,23 @@ class WorkflowRunner:
             rec.ended_at = _now()
             rec.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             wf._logger = None
+
+    def _run_wait(self, wf: Workflow, func, meta: Dict[str, Any],
+                  rec: StepRecord) -> None:
+        """Run the step body once, then pause for wait_seconds (cancellable)
+        before the flow continues with next."""
+        res = self._call(wf, func)
+        if isinstance(res, dict):
+            self._merge_result(wf, res)
+        spec = meta.get("wait_seconds", 0)
+        seconds = float(_eval_expr(spec, wf.ctx)) if isinstance(spec, str) else float(spec or 0)
+        seconds = max(0.0, seconds)
+        rec.waited_s = seconds
+        rec.logs.append(f"{_now()}  waiting {seconds}s before continuing")
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self._check_cancelled()
+            time.sleep(min(CANCEL_POLL_SECONDS, max(0.01, deadline - time.monotonic())))
 
     def _run_loop_parallel(self, wf: Workflow, func, meta: Dict[str, Any],
                            rec: StepRecord, var: str, items: List[Any],

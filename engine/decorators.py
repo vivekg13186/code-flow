@@ -44,6 +44,7 @@ def _attach_meta(
         "next": next,
         "condition": condition,
         "loop": loop,
+        "is_wait": False,
         "retry": int(retry or 0),
         "retry_delay": float(retry_delay or 0),
         "retry_backoff": max(1.0, float(retry_backoff or 1)),
@@ -164,5 +165,50 @@ def step(
             parallel=parallel,
             is_start=False,
         )
+
+    return decorator
+
+
+def wait(
+    seconds: float | str,
+    name: Optional[str] = None,
+    next: Optional[str] = None,
+    condition: Optional[str] = None,
+):
+    """Mark a wait step: run the function body once (optional work/logging,
+    a returned dict merges into ctx as usual), then pause for ``seconds``
+    before continuing to ``next``.
+
+        @wait(seconds=30, name="Cooldown", next="Verify")
+        def cooldown(self, ctx):
+            self.log("letting the deploy settle")
+
+    ``seconds`` may also be an expression evaluated against the context,
+    e.g. ``seconds="delay * 2"`` or ``seconds="retry_after"``.
+
+    The pause is cancellable from the UI, and a ``condition=`` that is
+    falsy skips the step (including the pause) entirely.
+    """
+    def decorator(func: Callable) -> Callable:
+        wrapped = _attach_meta(
+            func,
+            name=name,
+            next=next,
+            condition=condition,
+            loop=None,
+            retry=0,
+            retry_delay=0,
+            retry_backoff=1,
+            retry_on=None,
+            continue_on_error=False,
+            timeout=None,
+            parallel=1,
+            is_start=False,
+        )
+        wrapped._step_meta.update({
+            "is_wait": True,
+            "wait_seconds": seconds,
+        })
+        return wrapped
 
     return decorator

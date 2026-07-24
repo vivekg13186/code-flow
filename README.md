@@ -2,6 +2,12 @@
 
 A tiny **annotation-based workflow engine** in Python with a web UI.
 
+## Demo
+
+![code flow demo](docs/code-flow-demo.gif)
+
+*(5× speed preview — [full-quality video](docs/code-flow-demo.mov))*
+
 ## Why code-flow
 
 - **See the values later.** Run a test or an API call and inspect what
@@ -223,6 +229,28 @@ dependency-free inline SVG. Dashboard refreshes are **transient** — they
 don't create history entries (auto-refresh would flood it); use the normal
 Run button for a persisted snapshot with a report. Deep-link a dashboard
 with `/#dashboards/<FlowName>`. See `workflows/examples/OpsDashboard.py`.
+
+### Wait steps
+
+`@wait` pauses the flow for N seconds before moving on — the body runs
+once first (log something, return a dict to merge into ctx), then the
+engine sleeps:
+
+```python
+from engine import Workflow, start, step, wait
+
+@wait(seconds=30, name="Cooldown", next="Verify")
+def cooldown(self, ctx):
+    self.log("letting the deploy settle")
+
+@wait(seconds="retry_after", name="Backoff", next="Fetch")   # from ctx
+def backoff(self, ctx): pass
+```
+
+`seconds` is a number or an expression evaluated against the context. The
+pause is cancellable from the UI, shows as ⏳ in the flow card and diagram,
+and the report records how long it paused. A falsy `condition=` skips the
+step including the pause.
 
 ### Typed inputs
 

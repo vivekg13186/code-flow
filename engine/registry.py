@@ -105,6 +105,7 @@ def workflow_summary(cls: Type[Workflow]) -> dict:
                 "continue_on_error": meta.get("continue_on_error", False),
                 "timeout": meta.get("timeout"),
                 "parallel": meta.get("parallel", 1),
+                "wait_seconds": meta.get("wait_seconds") if meta.get("is_wait") else None,
                 "is_start": meta.get("is_start", False),
                 "doc": meta.get("doc", ""),
             }

@@ -17,7 +17,7 @@ Define workflows as classes with @start / @step decorated methods:
         def step2(self, ctx):
             print(ctx["i"])
 """
-from .decorators import start, step
+from .decorators import start, step, wait
 from .workflow import Workflow
 from .runner import WorkflowRunner, RunRecord, StepRecord, StepTimeoutError
 from .registry import discover_workflows
@@ -25,6 +25,7 @@ from .registry import discover_workflows
 __all__ = [
     "start",
     "step",
+    "wait",
     "Workflow",
     "WorkflowRunner",
     "RunRecord",

@@ -200,6 +200,10 @@ def render_report(run: Dict[str, Any]) -> str:
                 f"<tr><td class='k'>condition</td><td><code>{html.escape(s['condition'])}</code>"
                 f" → <b>{res}</b></td></tr>"
             )
+        if s.get("waited_s") is not None:
+            detail_rows.append(
+                f"<tr><td class='k'>wait</td><td>paused {s['waited_s']}s before continuing</td></tr>"
+            )
         if s.get("loop"):
             detail_rows.append(
                 f"<tr><td class='k'>loop</td><td><code>{html.escape(s['loop'])}</code>"
