@@ -142,6 +142,15 @@ sub-workflows. `404` if unknown/finished, `409` if not RUNNING.
 { "run_id": "9bf75928e9fc", "cancelling": true }
 ```
 
+### `POST /api/runs/{run_id}/restart`
+
+Start a **new** run of the same flow with the original run's inputs and
+environment. Env values are re-resolved fresh at restart time. `404` if the
+flow or environment no longer exists; `422` if the flow's `inputs_schema`
+changed and the old inputs no longer validate.
+
+Response: `{ "run_id": "…", "workflow": "…", "environment": "…", "restarted_from": "…" }`
+
 ### `DELETE /api/runs/{run_id}`
 
 Delete one finished run (report + record + index entry). `409` if the run

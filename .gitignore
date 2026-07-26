@@ -28,3 +28,5 @@ workflows/_drafts/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+reddit

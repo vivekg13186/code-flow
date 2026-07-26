@@ -54,6 +54,7 @@ class Workflow:
         self._outputs: Dict[str, Any] = {}
         self._logger = None      # injected by the runner
         self._image_sink = None  # injected by the runner (log_image target)
+        self._block_sink = None  # injected by the runner (log_json/log_table)
         self._runner = None  # injected by the runner (used by call_workflow)
         self.env: Dict[str, Any] = {}  # selected environment (set by the runner)
         self._widgets: List[Dict[str, Any]] = []
@@ -167,10 +168,52 @@ class Workflow:
         else:  # pragma: no cover - headless use
             print(f"[{self.name}] {message}")
 
+    def log_json(self, data: Any, title: str = "") -> None:
+        """Log a structured object — rendered as pretty-printed, syntax-safe
+        JSON in the run's report instead of a flat string:
+
+            self.log_json(response.json(), title="API response")
+        """
+        import json as _json
+        try:
+            text = _json.dumps(data, indent=2, default=str, ensure_ascii=False)
+        except Exception:  # noqa: BLE001 - truly unserializable
+            text = repr(data)
+        if len(text) > self.MAX_BLOCK_CHARS:
+            text = text[: self.MAX_BLOCK_CHARS] + "\n… (truncated)"
+        self._emit_block({"type": "json", "title": str(title), "text": text})
+
+    def log_table(self, rows: Any, title: str = "") -> None:
+        """Log tabular data — rendered as a real table in the run's report:
+
+            self.log_table([{"file": f, "rows": n}, ...], title="Processed")
+
+        Accepts a list of dicts (columns = union of keys) or a list of
+        scalars (single 'value' column). Capped at 200 rows.
+        """
+        if not isinstance(rows, list):
+            raise TypeError("log_table expects a list of dicts (or scalars)")
+        norm = []
+        for r in rows[: self.MAX_TABLE_ROWS]:
+            norm.append(r if isinstance(r, dict) else {"value": r})
+        truncated = len(rows) > self.MAX_TABLE_ROWS
+        self._emit_block({"type": "table", "title": str(title),
+                          "rows": norm, "truncated": truncated})
+
+    def _emit_block(self, block: Dict[str, Any]) -> None:
+        if self._block_sink is not None:
+            self._block_sink(block)
+        else:  # pragma: no cover - headless use without a runner
+            self.log(f"[{block['type']}: {block.get('title') or 'untitled'}]")
+
     #: caps for log_image (reports are self-contained HTML — images embed as
     #: base64, so keep them reasonable)
     MAX_IMAGE_BYTES = 3_000_000
     MAX_IMAGES_PER_STEP = 20
+    #: caps for log_json / log_table
+    MAX_BLOCK_CHARS = 200_000
+    MAX_TABLE_ROWS = 200
+    MAX_BLOCKS_PER_STEP = 50
 
     def log_image(self, image: Any, title: str = "", format: str = "png") -> None:
         """Attach an image to the current step — it appears inline in the

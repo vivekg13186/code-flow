@@ -233,6 +233,30 @@ def render_report(run: Dict[str, Any]) -> str:
             else ""
         )
         logs_html = f"<pre class='logs'>{logs}</pre>" if logs else ""
+        blocks_html = ""
+        for bi, b in enumerate(s.get("blocks", []) or [], 1):
+            btitle = (f"{b['type']} #{bi}"
+                      + (f" — {html.escape(b['title'])}" if b.get("title") else ""))
+            if b.get("type") == "json":
+                blocks_html += (f"<div class='log-block'><div class='bt'>{btitle}</div>"
+                                f"<pre class='jsonlog'>{html.escape(b.get('text') or '')}</pre></div>")
+            elif b.get("type") == "table":
+                rows = b.get("rows") or []
+                cols: list = []
+                for r in rows[:50]:
+                    for k in r:
+                        if k not in cols:
+                            cols.append(k)
+                head = "".join(f"<th>{html.escape(str(c))}</th>" for c in cols)
+                body = "".join(
+                    "<tr>" + "".join(
+                        f"<td>{html.escape('' if r.get(c) is None else (str(r[c]) if not isinstance(r[c], (dict, list)) else __import__('json').dumps(r[c])))}</td>"
+                        for c in cols) + "</tr>"
+                    for r in rows)
+                note = "<div class='muted' style='font-size:11px'>… truncated</div>" if b.get("truncated") else ""
+                blocks_html += (f"<div class='log-block'><div class='bt'>{btitle}</div>"
+                                f"<div class='logtbl-wrap'><table class='logtbl'>"
+                                f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>{note}</div>")
         imgs_html = ""
         if s.get("images"):
             figs = "".join(
@@ -252,7 +276,7 @@ def render_report(run: Dict[str, Any]) -> str:
           {_badge(s.get('status', '?'))}
           <span class="muted right">{s.get('duration_ms', '—')} ms</span>
         </div>
-        {detail}{logs_html}{imgs_html}{tb}
+        {detail}{logs_html}{blocks_html}{imgs_html}{tb}
       </div>"""
         )
 
@@ -287,6 +311,18 @@ def render_report(run: Dict[str, Any]) -> str:
   pre {{ background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px;
         font-size:12px; overflow:auto; }}
   pre.logs {{ background:#f8fafc; color:#334155; border:1px solid #e2e8f0; }}
+  .log-block {{ margin-top:10px; }}
+  .log-block .bt {{ font-size:10.5px; font-weight:700; color:#6b7280;
+                   text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }}
+  pre.jsonlog {{ background:#0f172a; color:#a5f3fc; padding:12px; border-radius:8px;
+                font-size:12px; overflow:auto; max-height:340px; margin:0; }}
+  .logtbl-wrap {{ overflow:auto; max-height:300px; border:1px solid #e5e7eb;
+                 border-radius:8px; }}
+  table.logtbl {{ border-collapse:collapse; font-size:12px; width:100%; }}
+  table.logtbl th {{ background:#f9fafb; text-align:left; padding:6px 10px;
+                    position:sticky; top:0; border-bottom:1px solid #e5e7eb;
+                    font-size:11px; color:#6b7280; }}
+  table.logtbl td {{ padding:5px 10px; border-bottom:1px solid #f3f4f6; }}
   .step-imgs {{ display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; }}
   .step-imgs figure {{ margin:0; }}
   .step-imgs img {{ max-width:440px; max-height:340px; border:1px solid #e5e7eb;

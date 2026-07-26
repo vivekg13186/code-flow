@@ -182,6 +182,10 @@ class MyFlow(Workflow):
   child). Call cycles (A → B → A) are detected and rejected. See
   `workflows/Flow3.py`.
 - **Logging**: `self.log("...")` lines appear in the HTML execution report.
+  Structured variants: `self.log_json(obj, title="API response")` renders
+  pretty-printed JSON, `self.log_table(rows, title="Processed")` renders a
+  real table (list of dicts or scalars, 200-row cap). A marker line in the
+  text log keeps the chronological context.
 - **Images**: `self.log_image(path_or_bytes_or_figure, title="Sales chart")`
   attaches an image to the step, shown inline in the run's report. Accepts
   file paths (png/jpg/gif/svg/webp), raw bytes (`format="svg"`), data URIs,

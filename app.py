@@ -223,6 +223,46 @@ def cancel_run(run_id: str):
     return {"run_id": run_id, "cancelling": True}
 
 
+@app.post("/api/runs/{run_id}/restart")
+def restart_run(run_id: str):
+    """Start a NEW run of the same flow with the original run's inputs and
+    environment (env values are re-resolved fresh, so rotated secrets or
+    edited env files apply)."""
+    with _runs_lock:
+        rec = dict(_live_runs.get(run_id) or {})
+    if not rec:
+        json_path = HISTORY_DIR / f"{run_id}.json"
+        if not json_path.exists():
+            raise HTTPException(404, "Run not found")
+        import json as _json
+        rec = _json.loads(json_path.read_text(encoding="utf-8"))
+
+    flow_name = rec.get("workflow")
+    registry, _ = _get_registry()
+    cls = registry.get(flow_name)
+    if cls is None:
+        raise HTTPException(404, f"Workflow no longer exists: {flow_name}")
+
+    inputs = rec.get("inputs") or {}
+    inputs, errors = validate_for_class(cls, inputs)
+    if errors:
+        raise HTTPException(422, {"message": "input validation failed", "errors": errors})
+
+    env_name = rec.get("environment")
+    env = None
+    if env_name:
+        envs, _ = load_environments(ENVIRONMENTS_DIR)
+        if env_name not in envs:
+            raise HTTPException(404, f"Environment no longer exists: {env_name}")
+        env = envs[env_name]
+
+    new_id = _launch(cls, inputs, env=env, env_name=env_name)
+    if not new_id:
+        raise HTTPException(500, "Workflow failed to start")
+    return {"run_id": new_id, "workflow": flow_name, "environment": env_name,
+            "restarted_from": run_id}
+
+
 @app.delete("/api/runs/{run_id}")
 def delete_run(run_id: str):
     with _runs_lock:

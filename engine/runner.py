@@ -81,6 +81,7 @@ class StepRecord:
     continued: bool = False   # failed but flow continued (continue_on_error)
     waited_s: Optional[float] = None  # @wait steps: how long the pause was
     images: List[Dict[str, str]] = field(default_factory=list)  # log_image attachments
+    blocks: List[Dict[str, Any]] = field(default_factory=list)  # log_json / log_table
     logs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -275,6 +276,16 @@ class WorkflowRunner:
             rec.images.append(spec)
         wf._image_sink = _image_sink
 
+        def _block_sink(block):
+            if len(rec.blocks) >= Workflow.MAX_BLOCKS_PER_STEP:
+                rec.logs.append(f"{_now()}  log block cap reached, skipped")
+                return
+            rec.blocks.append(block)
+            # marker keeps chronological context inside the text log
+            rec.logs.append(f"{_now()}  [{block['type']} #{len(rec.blocks)}"
+                            + (f": {block['title']}" if block.get("title") else "") + "]")
+        wf._block_sink = _block_sink
+
         try:
             # -- condition gate ------------------------------------------
             if meta.get("condition"):
@@ -338,6 +349,7 @@ class WorkflowRunner:
             rec.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             wf._logger = None
             wf._image_sink = None
+            wf._block_sink = None
 
     def _run_wait(self, wf: Workflow, func, meta: Dict[str, Any],
                   rec: StepRecord) -> None:
