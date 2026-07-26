@@ -233,6 +233,15 @@ def render_report(run: Dict[str, Any]) -> str:
             else ""
         )
         logs_html = f"<pre class='logs'>{logs}</pre>" if logs else ""
+        imgs_html = ""
+        if s.get("images"):
+            figs = "".join(
+                f"<figure><img src='{img['data']}' alt='{html.escape(img.get('title') or 'image')}'/>"
+                + (f"<figcaption>{html.escape(img['title'])}</figcaption>" if img.get("title") else "")
+                + "</figure>"
+                for img in s["images"]
+            )
+            imgs_html = f"<div class='step-imgs'>{figs}</div>"
         steps_html.append(
             f"""
       <div class="step">
@@ -243,7 +252,7 @@ def render_report(run: Dict[str, Any]) -> str:
           {_badge(s.get('status', '?'))}
           <span class="muted right">{s.get('duration_ms', '—')} ms</span>
         </div>
-        {detail}{logs_html}{tb}
+        {detail}{logs_html}{imgs_html}{tb}
       </div>"""
         )
 
@@ -278,6 +287,11 @@ def render_report(run: Dict[str, Any]) -> str:
   pre {{ background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px;
         font-size:12px; overflow:auto; }}
   pre.logs {{ background:#f8fafc; color:#334155; border:1px solid #e2e8f0; }}
+  .step-imgs {{ display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; }}
+  .step-imgs figure {{ margin:0; }}
+  .step-imgs img {{ max-width:440px; max-height:340px; border:1px solid #e5e7eb;
+                   border-radius:8px; background:#fff; display:block; }}
+  .step-imgs figcaption {{ font-size:11px; color:#6b7280; margin-top:4px; }}
   .run-error {{ background:#fef2f2; border:1px solid #fecaca; color:#b91c1c;
               border-radius:10px; padding:12px 16px; margin-top:16px; }}
   h2 {{ font-size:15px; margin:26px 0 4px; }}

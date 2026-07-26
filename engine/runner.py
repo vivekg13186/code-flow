@@ -80,6 +80,7 @@ class StepRecord:
     traceback: Optional[str] = None
     continued: bool = False   # failed but flow continued (continue_on_error)
     waited_s: Optional[float] = None  # @wait steps: how long the pause was
+    images: List[Dict[str, str]] = field(default_factory=list)  # log_image attachments
     logs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -267,6 +268,13 @@ class WorkflowRunner:
         t0 = time.monotonic()
         wf._logger = lambda msg: rec.logs.append(f"{_now()}  {msg}")
 
+        def _image_sink(spec):
+            if len(rec.images) >= Workflow.MAX_IMAGES_PER_STEP:
+                rec.logs.append(f"{_now()}  log_image: image cap reached, skipped")
+                return
+            rec.images.append(spec)
+        wf._image_sink = _image_sink
+
         try:
             # -- condition gate ------------------------------------------
             if meta.get("condition"):
@@ -329,6 +337,7 @@ class WorkflowRunner:
             rec.ended_at = _now()
             rec.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             wf._logger = None
+            wf._image_sink = None
 
     def _run_wait(self, wf: Workflow, func, meta: Dict[str, Any],
                   rec: StepRecord) -> None:

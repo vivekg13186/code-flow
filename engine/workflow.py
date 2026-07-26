@@ -52,7 +52,8 @@ class Workflow:
         self.inputs = merged
         self.ctx: Dict[str, Any] = dict(merged)
         self._outputs: Dict[str, Any] = {}
-        self._logger = None  # injected by the runner
+        self._logger = None      # injected by the runner
+        self._image_sink = None  # injected by the runner (log_image target)
         self._runner = None  # injected by the runner (used by call_workflow)
         self.env: Dict[str, Any] = {}  # selected environment (set by the runner)
         self._widgets: List[Dict[str, Any]] = []
@@ -165,6 +166,64 @@ class Workflow:
             self._logger(str(message))
         else:  # pragma: no cover - headless use
             print(f"[{self.name}] {message}")
+
+    #: caps for log_image (reports are self-contained HTML — images embed as
+    #: base64, so keep them reasonable)
+    MAX_IMAGE_BYTES = 3_000_000
+    MAX_IMAGES_PER_STEP = 20
+
+    def log_image(self, image: Any, title: str = "", format: str = "png") -> None:
+        """Attach an image to the current step — it appears inline in the
+        run's HTML report (history). Accepts:
+
+        - a file path: ``self.log_image("out/chart.png", title="Sales")``
+        - raw bytes:   ``self.log_image(svg_bytes, format="svg")``
+        - a data URI string ("data:image/png;base64,...")
+        - a matplotlib figure (anything with .savefig): saved as PNG
+
+        Supported formats: png, jpg/jpeg, gif, svg, webp. Images embed into
+        the report as base64 (cap: 3 MB each, 20 per step) so reports stay
+        self-contained files.
+        """
+        import base64
+        from pathlib import Path as _P
+
+        mime_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "gif": "image/gif", "svg": "image/svg+xml", "webp": "image/webp"}
+
+        if hasattr(image, "savefig"):  # matplotlib figure
+            import io
+            buf = io.BytesIO()
+            image.savefig(buf, format="png", bbox_inches="tight", dpi=110)
+            data, fmt = buf.getvalue(), "png"
+        elif isinstance(image, (bytes, bytearray)):
+            data, fmt = bytes(image), format.lower().lstrip(".")
+        elif isinstance(image, (str, _P)) and str(image).startswith("data:image/"):
+            self._emit_image({"title": str(title), "data": str(image)})
+            return
+        elif isinstance(image, (str, _P)):
+            p = _P(image)
+            if not p.is_file():
+                raise FileNotFoundError(f"log_image: no such file: {image}")
+            data, fmt = p.read_bytes(), (p.suffix.lstrip(".") or format).lower()
+        else:
+            raise TypeError(f"log_image: unsupported type {type(image).__name__}")
+
+        if fmt not in mime_map:
+            raise ValueError(f"log_image: unsupported format {fmt!r} "
+                             f"(use one of {sorted(mime_map)})")
+        if len(data) > self.MAX_IMAGE_BYTES:
+            self.log(f"log_image: skipped {title or 'image'} — "
+                     f"{len(data)} bytes exceeds {self.MAX_IMAGE_BYTES} cap")
+            return
+        uri = f"data:{mime_map[fmt]};base64,{base64.b64encode(data).decode()}"
+        self._emit_image({"title": str(title), "data": uri})
+
+    def _emit_image(self, spec: Dict[str, str]) -> None:
+        if self._image_sink is not None:
+            self._image_sink(spec)
+        else:  # pragma: no cover - headless use without a runner
+            self.log(f"[image: {spec.get('title') or 'untitled'}]")
 
     # ------------------------------------------------------------- helpers
     @classmethod
