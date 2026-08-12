@@ -18,6 +18,8 @@ workflows/_drafts/
 
 # real secret values for ${VAR} references (docker compose reads this)
 .env
+# local install config (written by scripts/install.*)
+.codeflow.env
 
 # editors / OS
 .idea/
@@ -28,5 +30,7 @@ workflows/_drafts/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
-reddit
+workflows/reddit/RedditStance.py
+workflows/reddit/RedditStance2.py
+workflows/reddit/d1.json
+workflows/reddit/d2.json

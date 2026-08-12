@@ -23,6 +23,17 @@ from engine.reports import HistoryStore
 from engine.scheduler import Scheduler
 
 BASE_DIR = Path(__file__).parent
+
+# .codeflow.env (written by scripts/install.*) — loaded as defaults so plain
+# `python app.py` also respects the configured paths; real env vars win
+_cfg = BASE_DIR / ".codeflow.env"
+if _cfg.exists():
+    for _line in _cfg.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 # folder locations are overridable so they can live outside the app
 # (e.g. Docker volume mounts) — see docker-compose.yml
 WORKFLOWS_DIR = Path(os.environ.get("CODEFLOW_WORKFLOWS_DIR", BASE_DIR / "workflows"))
@@ -98,7 +109,8 @@ def _get_registry():
 
 def _launch(workflow_cls, inputs: Optional[Dict[str, Any]],
             env: Optional[Dict[str, Any]] = None,
-            env_name: Optional[str] = None) -> str:
+            env_name: Optional[str] = None,
+            resume: Optional[Dict[str, Any]] = None) -> str:
     holder: Dict[str, str] = {}
     started = threading.Event()
     cancel_event = threading.Event()
@@ -121,7 +133,7 @@ def _launch(workflow_cls, inputs: Optional[Dict[str, Any]],
         try:
             WorkflowRunner(workflow_cls, inputs=inputs, on_update=on_update,
                            env=env, env_name=env_name,
-                           cancel_event=cancel_event).run()
+                           cancel_event=cancel_event, resume=resume).run()
         finally:
             started.set()
 
@@ -261,6 +273,65 @@ def restart_run(run_id: str):
         raise HTTPException(500, "Workflow failed to start")
     return {"run_id": new_id, "workflow": flow_name, "environment": env_name,
             "restarted_from": run_id}
+
+
+@app.post("/api/runs/{run_id}/resume")
+def resume_run(run_id: str):
+    """Resume a FAILED / CANCELLED / INTERRUPTED run: start a new run at the
+    step where it stopped, with the context restored to the state at that
+    moment. Env values are re-resolved fresh. Steps before the resume point
+    are not re-executed."""
+    import json as _json
+
+    resume_path = HISTORY_DIR / f"{run_id}.resume.json"
+    if not resume_path.exists():
+        raise HTTPException(404, "No resume state for this run")
+    state = _json.loads(resume_path.read_text(encoding="utf-8"))
+
+    # find the step where the run stopped
+    stopped = [s for s in state.get("steps", [])
+               if s.get("status") in ("FAILED", "CANCELLED", "INTERRUPTED")]
+    if not stopped:
+        raise HTTPException(409, "Run has no failed/cancelled step — use restart instead")
+    start_at = stopped[-1]["name"]
+
+    flow_name = state.get("workflow")
+    registry, _ = _get_registry()
+    cls = registry.get(flow_name)
+    if cls is None:
+        raise HTTPException(404, f"Workflow no longer exists: {flow_name}")
+    if start_at not in cls.collect_steps():
+        raise HTTPException(409, f"Step {start_at!r} no longer exists in {flow_name}")
+
+    env_name = state.get("environment")
+    env = None
+    if env_name:
+        envs, _ = load_environments(ENVIRONMENTS_DIR)
+        if env_name not in envs:
+            raise HTTPException(404, f"Environment no longer exists: {env_name}")
+        env = envs[env_name]
+
+    # carry the completed steps (before the stop point) into the new report
+    prior_steps = []
+    record_path = HISTORY_DIR / f"{run_id}.json"
+    if record_path.exists():
+        try:
+            old = _json.loads(record_path.read_text(encoding="utf-8"))
+            for s in old.get("steps", []):
+                if s.get("name") == start_at and s.get("status") in (
+                        "FAILED", "CANCELLED", "INTERRUPTED"):
+                    break
+                prior_steps.append(s)
+        except Exception:  # noqa: BLE001 - inheritance is best-effort
+            prior_steps = []
+
+    new_id = _launch(cls, state.get("inputs") or {}, env=env, env_name=env_name,
+                     resume={"ctx": state.get("ctx") or {}, "start_at": start_at,
+                             "from_run": run_id, "prior_steps": prior_steps})
+    if not new_id:
+        raise HTTPException(500, "Workflow failed to start")
+    return {"run_id": new_id, "workflow": flow_name, "environment": env_name,
+            "resumed_from": run_id, "resumed_at_step": start_at}
 
 
 @app.delete("/api/runs/{run_id}")

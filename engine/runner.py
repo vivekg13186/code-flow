@@ -80,6 +80,7 @@ class StepRecord:
     traceback: Optional[str] = None
     continued: bool = False   # failed but flow continued (continue_on_error)
     waited_s: Optional[float] = None  # @wait steps: how long the pause was
+    inherited: bool = False   # carried over from the run this one resumed
     images: List[Dict[str, str]] = field(default_factory=list)  # log_image attachments
     blocks: List[Dict[str, Any]] = field(default_factory=list)  # log_json / log_table
     logs: List[str] = field(default_factory=list)
@@ -100,6 +101,11 @@ class RunRecord:
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
     context: Dict[str, Any] = field(default_factory=dict)  # ctx snapshot (masked)
+    resumed_from: Optional[str] = None    # run this one resumed from
+    resumed_at_step: Optional[str] = None  # step the resume started at
+    # faithful ctx for resume (unmasked, env excluded) — NOT serialized into
+    # the run record; the history store writes it to a separate sidecar file
+    raw_ctx: Dict[str, Any] = field(default_factory=dict)
     widgets: List[Dict[str, Any]] = field(default_factory=list)  # dashboard widgets
     started_at: str = ""
     ended_at: Optional[str] = None
@@ -109,6 +115,7 @@ class RunRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         d = dict(self.__dict__)
+        d.pop("raw_ctx", None)  # resume state lives in the sidecar file only
         d["steps"] = [s.to_dict() for s in self.steps]
         return d
 
@@ -122,7 +129,8 @@ class WorkflowRunner:
                  call_chain: Optional[List[str]] = None,
                  env: Optional[Dict[str, Any]] = None,
                  env_name: Optional[str] = None,
-                 cancel_event: Optional[threading.Event] = None):
+                 cancel_event: Optional[threading.Event] = None,
+                 resume: Optional[Dict[str, Any]] = None):
         self.workflow_cls = workflow_cls
         self.inputs = inputs or {}
         self.on_update = on_update or (lambda rec: None)
@@ -134,6 +142,8 @@ class WorkflowRunner:
         # cooperative cancellation flag; sub-workflows share the parent's
         self.cancel_event = cancel_event if cancel_event is not None else threading.Event()
         self._rec_lock = threading.Lock()  # guards step counters in parallel loops
+        # resume: {"ctx": {...}, "start_at": "StepName", "from_run": "<run_id>"}
+        self.resume = resume
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunRecord:
@@ -177,6 +187,20 @@ class WorkflowRunner:
             return record
         steps_meta = self.workflow_cls.collect_steps()
         current = self.workflow_cls.start_step()
+        if self.resume:
+            # restore the context as it was and start at the given step
+            wf.ctx.update(self.resume.get("ctx") or {})
+            wf.ctx["env"] = wf.env  # env is always re-resolved fresh
+            current = self.resume.get("start_at")
+            record.resumed_from = self.resume.get("from_run")
+            record.resumed_at_step = current
+            # carry the original run's completed steps into this report,
+            # marked as inherited (not re-executed)
+            valid = {f.name for f in StepRecord.__dataclass_fields__.values()}
+            for d in self.resume.get("prior_steps") or []:
+                sr = StepRecord(**{k: v for k, v in d.items() if k in valid})
+                sr.inherited = True
+                record.steps.append(sr)
         if current is None:
             record.status = "FAILED"
             record.error = "Workflow has no @start step"
@@ -201,6 +225,7 @@ class WorkflowRunner:
                 self.on_update(record)
                 override_next = self._execute_step(wf, meta, step_rec)
                 record.context = self._snapshot_ctx(wf)  # live view of ctx
+                record.raw_ctx = {k: v for k, v in wf.ctx.items() if k != "env"}
                 self.on_update(record)
                 current = override_next if override_next is not None else meta.get("next")
             record.status = "SUCCESS"
@@ -217,6 +242,7 @@ class WorkflowRunner:
         finally:
             record.outputs = dict(wf.outputs())
             record.context = self._snapshot_ctx(wf)
+            record.raw_ctx = {k: v for k, v in wf.ctx.items() if k != "env"}
             record.widgets = list(wf.widgets())[:200]  # sanity cap
             record.ended_at = _now()
             record.duration_ms = round((time.monotonic() - t0) * 1000, 1)

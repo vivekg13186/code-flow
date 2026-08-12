@@ -46,6 +46,21 @@ class HistoryStore:
                 json.dumps(data, indent=2, default=str), encoding="utf-8"
             )
             report_path.write_text(render_report(data), encoding="utf-8")
+            # resume sidecar: faithful ctx + step statuses, used by
+            # POST /api/runs/{id}/resume (values must be JSON-serializable
+            # to round-trip exactly; others degrade via str())
+            try:
+                (self.folder / f"{record.run_id}.resume.json").write_text(
+                    json.dumps({
+                        "workflow": record.workflow,
+                        "inputs": record.inputs,
+                        "environment": record.environment,
+                        "ctx": record.raw_ctx,
+                        "steps": [{"name": s.name, "status": s.status}
+                                  for s in record.steps],
+                    }, default=str), encoding="utf-8")
+            except Exception:  # noqa: BLE001 - resume is best-effort
+                pass
             index = self._read_index()
             entry = {
                 "run_id": record.run_id,
@@ -70,7 +85,7 @@ class HistoryStore:
                 for e in reversed(index):  # oldest first
                     if over > 0 and e.get("status") != "RUNNING":
                         over -= 1
-                        for suffix in (".json", ".html"):
+                        for suffix in (".json", ".html", ".resume.json"):
                             p = self.folder / f"{e['run_id']}{suffix}"
                             if p.exists():
                                 p.unlink()
@@ -131,7 +146,7 @@ class HistoryStore:
             index = self._read_index()
             new_index = [e for e in index if e["run_id"] != run_id]
             found = len(new_index) != len(index)
-            for suffix in (".json", ".html"):
+            for suffix in (".json", ".html", ".resume.json"):
                 p = self.folder / f"{run_id}{suffix}"
                 if p.exists():
                     p.unlink()
@@ -152,7 +167,7 @@ class HistoryStore:
             for e in index:
                 (keep if e.get("status") in keep_statuses else drop).append(e)
             for e in drop:
-                for suffix in (".json", ".html"):
+                for suffix in (".json", ".html", ".resume.json"):
                     p = self.folder / f"{e['run_id']}{suffix}"
                     if p.exists():
                         p.unlink()
@@ -266,14 +281,16 @@ def render_report(run: Dict[str, Any]) -> str:
                 for img in s["images"]
             )
             imgs_html = f"<div class='step-imgs'>{figs}</div>"
+        inherited = s.get("inherited")
         steps_html.append(
             f"""
-      <div class="step">
+      <div class="step{' inherited' if inherited else ''}">
         <div class="step-head">
           <span class="idx">{i}</span>
           <b>{html.escape(s['name'])}</b>
           <span class="muted">({html.escape(s.get('func_name', ''))})</span>
           {_badge(s.get('status', '?'))}
+          {'<span class="carried">carried over — not re-executed</span>' if inherited else ''}
           <span class="muted right">{s.get('duration_ms', '—')} ms</span>
         </div>
         {detail}{logs_html}{blocks_html}{imgs_html}{tb}
@@ -302,6 +319,9 @@ def render_report(run: Dict[str, Any]) -> str:
   .meta {{ display:flex; gap:24px; flex-wrap:wrap; margin-top:10px; font-size:14px; }}
   .meta div span {{ display:block; color:#6b7280; font-size:12px; }}
   .step {{ border:1px solid #e5e7eb; border-radius:10px; padding:12px 14px; margin-top:12px; background:#fff; }}
+  .step.inherited {{ opacity:.75; background:#fafafa; border-style:dashed; }}
+  .carried {{ font-size:11px; color:#6b7280; background:#f3f4f6; border-radius:999px;
+             padding:2px 9px; }}
   .step-head {{ display:flex; align-items:center; gap:10px; }}
   .idx {{ background:#eef2ff; color:#4338ca; border-radius:6px; padding:2px 8px; font-size:12px; font-weight:700; }}
   table.kv {{ border-collapse: collapse; margin-top:10px; font-size:13px; width:100%; }}
@@ -341,7 +361,11 @@ def render_report(run: Dict[str, Any]) -> str:
     <div class="muted">run <code>{html.escape(run['run_id'])}</code>{
         f' — sub-workflow of run <a href="/reports/{html.escape(run["parent_run_id"])}">'
         f'<code>{html.escape(run["parent_run_id"])}</code></a>'
-        if run.get("parent_run_id") else ""}</div>
+        if run.get("parent_run_id") else ""}{
+        f' — resumed from <a href="/reports/{html.escape(run["resumed_from"])}">'
+        f'<code>{html.escape(run["resumed_from"])}</code></a> at step '
+        f'<b>{html.escape(run.get("resumed_at_step") or "?")}</b>'
+        if run.get("resumed_from") else ""}</div>
     <div class="meta">
       <div><span>tags</span>{html.escape(', '.join(run.get('tags') or []) or '—')}</div>
       <div><span>environment</span>{html.escape(run.get('environment') or '—')}</div>

@@ -25,6 +25,25 @@ A tiny **annotation-based workflow engine** in Python with a web UI.
 
 ## Quick start
 
+**macOS / Linux**
+
+```bash
+bash scripts/install.sh   # venv + deps, asks where your workflows folder is
+bash scripts/start.sh     # starts the server and opens the browser
+```
+
+**Windows** — double-click `scripts\install.bat`, then `scripts\start.bat`
+(needs [Python 3.10+](https://www.python.org/downloads/) with "Add to PATH"
+ticked).
+
+The installer writes your choices to `.codeflow.env` (workflows path, port);
+edit that file or re-run the installer to change them. If you point it at an
+empty folder it offers to copy the sample flows in. All available settings
+are documented in [`.codeflow.env.sample`](.codeflow.env.sample) — copy it
+to `.codeflow.env` if you prefer configuring by hand.
+
+Manual alternative:
+
 ```bash
 pip install -r requirements.txt
 python app.py
@@ -199,6 +218,13 @@ class MyFlow(Workflow):
   even a crashed server leaves an honest partial record. On startup, runs
   that were RUNNING when the previous process died are marked
   **INTERRUPTED** in the history.
+- **Resume from failed step**: FAILED / CANCELLED / INTERRUPTED runs have a
+  ⏭ resume button (and `POST /api/runs/<id>/resume`) — a new run starts at
+  the step where the old one stopped, with the context restored; completed
+  steps are not re-executed. Keep context values JSON-serializable for
+  exact restore (see best practices); a failed loop step re-runs whole.
+  Try it: `workflows/examples/ResumeDemo.py` fails on purpose and tells you
+  how to "fix the outage" and resume.
 - **Cancellation**: every RUNNING run has a ✕ cancel button (also
   `POST /api/runs/<id>/cancel`). Cancel is cooperative — it takes effect at
   the next step boundary, loop iteration, retry wait, or timeout poll; a

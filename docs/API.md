@@ -151,6 +151,23 @@ changed and the old inputs no longer validate.
 
 Response: `{ "run_id": "…", "workflow": "…", "environment": "…", "restarted_from": "…" }`
 
+### `POST /api/runs/{run_id}/resume`
+
+Resume a `FAILED` / `CANCELLED` / `INTERRUPTED` run: starts a **new** run at
+the step where the old one stopped, with the context restored to its state
+at that moment — earlier steps are not re-executed. Env values are
+re-resolved fresh. The new run's report links back to the original.
+
+Requires the run's resume sidecar (`history/<id>.resume.json`, written
+automatically). `409` if the run has no failed step (use restart) or the
+step no longer exists; `404` if the flow/env/sidecar is gone.
+
+Caveats: context values must be JSON-serializable to round-trip exactly
+(others were degraded to strings via `str()`); a failed loop step re-runs
+from its first iteration.
+
+Response: `{ "run_id": "…", "resumed_from": "…", "resumed_at_step": "Charge" }`
+
 ### `DELETE /api/runs/{run_id}`
 
 Delete one finished run (report + record + index entry). `409` if the run

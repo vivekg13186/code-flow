@@ -37,6 +37,10 @@ The context (`ctx`) is the flow's shared state. Rules of thumb:
   but hides the change.
 - **Seed accumulators before loops.** `return {"files": [...], "rows": 0}`
   in the step *before* a loop, then fold: `return {"rows": ctx["rows"] + n}`.
+- **JSON-serializable ctx is also what makes runs resumable.** Resume
+  restores the context from a JSON sidecar — values that don't serialize
+  (objects, handles) degrade to strings and won't round-trip. Numbers,
+  strings, lists, dicts resume exactly.
 - **Keep it JSON-ish and reasonably small.** Everything in ctx lands in the
   report's Context section (values over ~2 KB are truncated, non-JSON
   values become reprs). Don't carry a 50 MB DataFrame through ctx — write
