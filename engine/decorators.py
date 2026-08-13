@@ -106,6 +106,7 @@ def step(
     continue_on_error: bool = False,
     timeout: Optional[float] = None,
     parallel: int = 1,
+    resumable: bool = False,
 ):
     """Mark a workflow step.
 
@@ -148,9 +149,18 @@ def step(
                  with retry_on=TimeoutError). Note: the timed-out call cannot
                  be force-killed — it is abandoned in the background; write
                  steps so a stray duplicate finishing late is harmless.
+    resumable:   for sequential loop= steps — checkpoint each completed
+                 iteration, so a failed loop RESUMES AT THE FAILED ITEM
+                 instead of re-running from item 1. Requires a deterministic
+                 iterable (same expression → same items); not compatible
+                 with parallel>1. Iteration results must be
+                 JSON-serializable to restore exactly.
     """
+    if resumable and parallel > 1:
+        raise ValueError("resumable=True cannot be combined with parallel>1")
+
     def decorator(func: Callable) -> Callable:
-        return _attach_meta(
+        wrapped = _attach_meta(
             func,
             name=name,
             next=next,
@@ -165,6 +175,8 @@ def step(
             parallel=parallel,
             is_start=False,
         )
+        wrapped._step_meta["resumable"] = bool(resumable)
+        return wrapped
 
     return decorator
 

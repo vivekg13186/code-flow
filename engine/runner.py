@@ -106,6 +106,8 @@ class RunRecord:
     # faithful ctx for resume (unmasked, env excluded) — NOT serialized into
     # the run record; the history store writes it to a separate sidecar file
     raw_ctx: Dict[str, Any] = field(default_factory=dict)
+    # per-step loop checkpoints for resumable=True loops (sidecar only)
+    loop_progress: Dict[str, Any] = field(default_factory=dict)
     widgets: List[Dict[str, Any]] = field(default_factory=list)  # dashboard widgets
     started_at: str = ""
     ended_at: Optional[str] = None
@@ -116,6 +118,7 @@ class RunRecord:
     def to_dict(self) -> Dict[str, Any]:
         d = dict(self.__dict__)
         d.pop("raw_ctx", None)  # resume state lives in the sidecar file only
+        d.pop("loop_progress", None)
         d["steps"] = [s.to_dict() for s in self.steps]
         return d
 
@@ -142,8 +145,11 @@ class WorkflowRunner:
         # cooperative cancellation flag; sub-workflows share the parent's
         self.cancel_event = cancel_event if cancel_event is not None else threading.Event()
         self._rec_lock = threading.Lock()  # guards step counters in parallel loops
-        # resume: {"ctx": {...}, "start_at": "StepName", "from_run": "<run_id>"}
+        # resume: {"ctx": {...}, "start_at": "StepName", "from_run": "<run_id>",
+        #          "prior_steps": [...], "loop_progress": {...}}
         self.resume = resume
+        # live checkpoints of resumable loops: {step_name: {done, results}}
+        self.loop_progress: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunRecord:
@@ -168,6 +174,7 @@ class WorkflowRunner:
             self.call_chain = [wf.name]
         record = RunRecord(
             run_id=self.run_id,
+            loop_progress=self.loop_progress,  # live reference — sidecar sees updates
             workflow=wf.name,
             parent_run_id=self.parent_run_id,
             environment=self.env_name,
@@ -338,13 +345,32 @@ class WorkflowRunner:
                                                       list(iterable), workers)
                 else:
                     results = []
-                    for item in iterable:
+                    seq_items = list(iterable)
+                    start_idx = 0
+                    track = meta.get("resumable")
+                    if track:
+                        # resuming at this step? seed the checkpointed items
+                        prog = None
+                        if self.resume and self.resume.get("start_at") == meta["name"]:
+                            prog = (self.resume.get("loop_progress") or {}).get(meta["name"])
+                        if prog and 0 < int(prog.get("done", 0)) <= len(seq_items):
+                            start_idx = int(prog["done"])
+                            results = list(prog.get("results") or [])[:start_idx]
+                            rec.iterations = start_idx
+                            rec.logs.append(
+                                f"{_now()}  resumable loop: {start_idx}/{len(seq_items)} "
+                                "item(s) already done in the previous run — skipping them")
+                        self.loop_progress[meta["name"]] = {
+                            "done": start_idx, "results": results}
+                    for item in seq_items[start_idx:]:
                         self._check_cancelled()
                         wf.ctx[var] = item
                         rec.iterations += 1
                         res = self._call_with_retry(wf, func, meta, rec)
                         results.append(res)
                         self._merge_result(wf, res)
+                        if track:
+                            self.loop_progress[meta["name"]]["done"] = len(results)
                 rec.result = _short_repr(results)
                 wf.ctx[f"{_ctx_key(meta['name'])}_results"] = results
             else:

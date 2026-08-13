@@ -56,6 +56,7 @@ class HistoryStore:
                         "inputs": record.inputs,
                         "environment": record.environment,
                         "ctx": record.raw_ctx,
+                        "loop_progress": getattr(record, "loop_progress", {}) or {},
                         "steps": [{"name": s.name, "status": s.status}
                                   for s in record.steps],
                     }, default=str), encoding="utf-8")

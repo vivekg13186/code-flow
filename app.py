@@ -327,7 +327,8 @@ def resume_run(run_id: str):
 
     new_id = _launch(cls, state.get("inputs") or {}, env=env, env_name=env_name,
                      resume={"ctx": state.get("ctx") or {}, "start_at": start_at,
-                             "from_run": run_id, "prior_steps": prior_steps})
+                             "from_run": run_id, "prior_steps": prior_steps,
+                             "loop_progress": state.get("loop_progress") or {}})
     if not new_id:
         raise HTTPException(500, "Workflow failed to start")
     return {"run_id": new_id, "workflow": flow_name, "environment": env_name,

@@ -224,7 +224,11 @@ class MyFlow(Workflow):
   steps are not re-executed. Keep context values JSON-serializable for
   exact restore (see best practices); a failed loop step re-runs whole.
   Try it: `workflows/examples/ResumeDemo.py` fails on purpose and tells you
-  how to "fix the outage" and resume.
+  how to "fix the outage" and resume. For loops, add `resumable=True` to a
+  sequential `loop=` step and resume continues **at the failed item**
+  instead of re-running the loop from item 1 (checkpointed per iteration;
+  needs a deterministic iterable and JSON-serializable results — see
+  `workflows/examples/ResumableLoop.py`).
 - **Cancellation**: every RUNNING run has a ✕ cancel button (also
   `POST /api/runs/<id>/cancel`). Cancel is cooperative — it takes effect at
   the next step boundary, loop iteration, retry wait, or timeout poll; a
@@ -380,6 +384,9 @@ The **Schedules** tab lets you run flows automatically:
 - REST API: reference in [`docs/API.md`](docs/API.md), interactive Swagger
   at `/api/docs`
 - Writing flows: see [`docs/BEST_PRACTICES.md`](docs/BEST_PRACTICES.md)
+- Generating flows with AI: point your LLM at [`llms.txt`](llms.txt) — a
+  complete, compact engine reference (paste it into the prompt and ask for
+  the flow you want)
 
 ## Project layout
 
