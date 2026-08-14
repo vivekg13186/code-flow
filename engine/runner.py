@@ -69,6 +69,7 @@ class StepRecord:
     condition_result: Optional[bool] = None
     loop: Optional[str] = None
     iterations: int = 0
+    iteration_details: List[Dict[str, Any]] = field(default_factory=list)
     attempts: int = 0
     max_attempts: int = 1
     parallel: int = 1
@@ -256,6 +257,30 @@ class WorkflowRunner:
             self.on_update(record)
         return record
 
+    MAX_ITER_DETAILS = 500
+
+    def _iter_detail(self, rec: StepRecord, idx: int, item: Any, status: str,
+                     t0: float, attempts: Optional[int] = None,
+                     result: Any = None, error: Optional[str] = None,
+                     carried: bool = False) -> None:
+        """Record one loop iteration as a sub-entry shown in the report."""
+        with self._rec_lock:
+            if len(rec.iteration_details) >= self.MAX_ITER_DETAILS:
+                if len(rec.iteration_details) == self.MAX_ITER_DETAILS:
+                    rec.iteration_details.append(
+                        {"i": idx, "status": "…", "item": "detail capped", "carried": False})
+                return
+            rec.iteration_details.append({
+                "i": idx,
+                "item": _short_repr(item, 120),
+                "status": status,
+                "attempts": attempts,
+                "duration_ms": None if carried else round((time.monotonic() - t0) * 1000, 1),
+                "result": _short_repr(result, 200) if result is not None else None,
+                "error": error,
+                "carried": carried,
+            })
+
     # ---------------------------------------------------------------- steps
     def _snapshot_ctx(self, wf: Workflow) -> Dict[str, Any]:
         """Display-safe snapshot of the context for reports: the env dict is
@@ -360,13 +385,27 @@ class WorkflowRunner:
                             rec.logs.append(
                                 f"{_now()}  resumable loop: {start_idx}/{len(seq_items)} "
                                 "item(s) already done in the previous run — skipping them")
+                            for j in range(start_idx):
+                                self._iter_detail(rec, j + 1, seq_items[j], "SUCCESS",
+                                                  0, result=results[j] if j < len(results) else None,
+                                                  carried=True)
                         self.loop_progress[meta["name"]] = {
                             "done": start_idx, "results": results}
                     for item in seq_items[start_idx:]:
                         self._check_cancelled()
                         wf.ctx[var] = item
                         rec.iterations += 1
-                        res = self._call_with_retry(wf, func, meta, rec)
+                        idx = rec.iterations
+                        att0, it0 = rec.attempts, time.monotonic()
+                        try:
+                            res = self._call_with_retry(wf, func, meta, rec)
+                        except Exception as exc:
+                            self._iter_detail(rec, idx, item, "FAILED", it0,
+                                              attempts=rec.attempts - att0,
+                                              error=f"{type(exc).__name__}: {exc}")
+                            raise
+                        self._iter_detail(rec, idx, item, "SUCCESS", it0,
+                                          attempts=rec.attempts - att0, result=res)
                         results.append(res)
                         self._merge_result(wf, res)
                         if track:
@@ -428,6 +467,20 @@ class WorkflowRunner:
         input order. Any iteration exhausting its retries fails the step."""
         results: List[Any] = [None] * len(items)
         rec.logs.append(f"{_now()}  running {len(items)} iteration(s) with parallel={workers}")
+
+        def run_one(idx: int, item: Any, ictx: Dict[str, Any]) -> Any:
+            it0 = time.monotonic()
+            try:
+                res = self._call_with_retry(wf, func, meta, rec, ictx)
+            except RunCancelled:
+                raise
+            except BaseException as exc:
+                self._iter_detail(rec, idx + 1, item, "FAILED", it0,
+                                  error=f"{type(exc).__name__}: {exc}")
+                raise
+            self._iter_detail(rec, idx + 1, item, "SUCCESS", it0, result=res)
+            return res
+
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=workers, thread_name_prefix="codeflow-loop") as pool:
             futures = {}
@@ -435,7 +488,7 @@ class WorkflowRunner:
                 self._check_cancelled()
                 ictx = dict(wf.ctx)
                 ictx[var] = item
-                futures[pool.submit(self._call_with_retry, wf, func, meta, rec, ictx)] = idx
+                futures[pool.submit(run_one, idx, item, ictx)] = idx
             try:
                 for fut in concurrent.futures.as_completed(futures):
                     results[futures[fut]] = fut.result()  # re-raises iteration failure
@@ -445,6 +498,7 @@ class WorkflowRunner:
                 for f in futures:
                     f.cancel()  # un-started iterations are dropped
                 raise
+        rec.iteration_details.sort(key=lambda d: d.get("i", 0))
         # merge in input order so precedence is deterministic
         for res in results:
             self._merge_result(wf, res)

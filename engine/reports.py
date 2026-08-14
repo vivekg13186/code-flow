@@ -249,6 +249,35 @@ def render_report(run: Dict[str, Any]) -> str:
             else ""
         )
         logs_html = f"<pre class='logs'>{logs}</pre>" if logs else ""
+
+        # loop iterations as numbered sub-steps: 2.1, 2.2, …
+        iters_html = ""
+        details = s.get("iteration_details") or []
+        if details:
+            rows = []
+            for d in details:
+                sub = f"{i}.{d.get('i', '?')}"
+                status = d.get("status", "?")
+                badge = _badge(status) if status in STATUS_COLORS else html.escape(str(status))
+                carried = " <span class='muted'>(from previous run)</span>" if d.get("carried") else ""
+                att = f"{d['attempts']}×" if d.get("attempts") not in (None, 1) else ""
+                dur = f"{d['duration_ms']} ms" if d.get("duration_ms") is not None else ""
+                out = (f"<span class='err'>{html.escape(str(d.get('error')))}</span>"
+                       if d.get("error")
+                       else (f"<code>{html.escape(str(d.get('result')))}</code>" if d.get("result") else ""))
+                rows.append(
+                    f"<tr><td class='subidx'>{sub}</td>"
+                    f"<td><code>{html.escape(str(d.get('item', '')))}</code></td>"
+                    f"<td>{badge}{carried}</td>"
+                    f"<td class='muted'>{att}</td><td class='muted'>{dur}</td>"
+                    f"<td class='iterout'>{out}</td></tr>")
+            table = ("<table class='itertbl'><thead><tr><th></th><th>item</th>"
+                     "<th>status</th><th></th><th></th><th>result</th></tr></thead>"
+                     f"<tbody>{''.join(rows)}</tbody></table>")
+            open_attr = " open" if len(details) <= 10 else ""
+            iters_html = (f"<details class='iters'{open_attr}><summary>"
+                          f"{len(details)} iteration(s)</summary>{table}</details>")
+
         blocks_html = ""
         for bi, b in enumerate(s.get("blocks", []) or [], 1):
             btitle = (f"{b['type']} #{bi}"
@@ -294,7 +323,7 @@ def render_report(run: Dict[str, Any]) -> str:
           {'<span class="carried">carried over — not re-executed</span>' if inherited else ''}
           <span class="muted right">{s.get('duration_ms', '—')} ms</span>
         </div>
-        {detail}{logs_html}{blocks_html}{imgs_html}{tb}
+        {detail}{iters_html}{logs_html}{blocks_html}{imgs_html}{tb}
       </div>"""
         )
 
@@ -332,6 +361,19 @@ def render_report(run: Dict[str, Any]) -> str:
   pre {{ background:#0f172a; color:#e2e8f0; padding:12px; border-radius:8px;
         font-size:12px; overflow:auto; }}
   pre.logs {{ background:#f8fafc; color:#334155; border:1px solid #e2e8f0; }}
+  details.iters {{ margin-top:10px; }}
+  details.iters summary {{ cursor:pointer; font-size:12px; color:#6b7280;
+                          font-weight:600; }}
+  table.itertbl {{ border-collapse:collapse; font-size:12px; width:100%; margin-top:6px; }}
+  table.itertbl th {{ text-align:left; color:#9ca3af; font-size:10.5px;
+                     text-transform:uppercase; padding:3px 8px;
+                     border-bottom:1px solid #e5e7eb; }}
+  table.itertbl td {{ padding:4px 8px; border-bottom:1px solid #f3f4f6;
+                     vertical-align:top; }}
+  table.itertbl td.subidx {{ color:#4338ca; font-weight:700; font-size:11px;
+                            white-space:nowrap; }}
+  table.itertbl td.iterout {{ max-width:380px; overflow:hidden;
+                             text-overflow:ellipsis; }}
   .log-block {{ margin-top:10px; }}
   .log-block .bt {{ font-size:10.5px; font-weight:700; color:#6b7280;
                    text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }}
