@@ -2,7 +2,7 @@
 
 Every ``*.py`` file in the folder — including subfolders, any depth — is
 imported (fresh on each call, so edits are picked up without restarting the
-server) and every subclass of ``Workflow`` with a ``@start`` step is
+server) and every subclass of ``Workflow`` with a ``@flow`` entry point is
 registered. Files or folders whose name starts with ``_`` (and
 ``__pycache__``) are skipped.
 
@@ -18,6 +18,8 @@ import sys
 import traceback
 from pathlib import Path
 from typing import Dict, List, Tuple, Type
+
+from . import inputs as _inputs
 
 from .workflow import Workflow
 
@@ -82,31 +84,40 @@ def discover_workflows(folder: str | Path) -> Tuple[Dict[str, Type[Workflow]], L
 def workflow_summary(cls: Type[Workflow]) -> dict:
     """JSON-friendly description of a workflow class for the UI."""
     steps = cls.collect_steps()
+    try:
+        import inspect
+        import textwrap
+        # dedent: getsource keeps the class-body indent, which wastes width
+        source = textwrap.dedent(inspect.getsource(cls.flow_entry())).rstrip()
+    except Exception:  # noqa: BLE001
+        source = ""
+    try:
+        schema = _inputs.schema_for(cls)
+        defaults = _inputs.defaults_for(cls)
+        schema_error = ""
+    except Exception as exc:  # noqa: BLE001 — bad dataclass shouldn't hide the flow
+        schema, defaults, schema_error = {}, {}, str(exc)
     return {
+        "source": source,
         "name": getattr(cls, "name_override", None) or cls.__name__,
         "description": (getattr(cls, "description", "") or (cls.__doc__ or "")).strip(),
         "dashboard": bool(getattr(cls, "dashboard", False)),
         "webhook": bool(getattr(cls, "webhook", False)),
         "tags": sorted(getattr(cls, "tags", []) or []),
         "file": getattr(cls, "_source_file", "?"),
-        "inputs": dict(getattr(cls, "inputs", {}) or {}),
-        "inputs_schema": dict(getattr(cls, "inputs_schema", {}) or {}),
-        "start": cls.start_step(),
+        "inputs": defaults,
+        "inputs_schema": schema,
+        "inputs_error": schema_error,
+        "entry": getattr(cls.flow_entry(), "__name__", "main"),
         "steps": [
             {
                 "name": meta["name"],
-                "next": meta.get("next"),
-                "condition": meta.get("condition"),
-                "loop": meta.get("loop"),
                 "retry": meta.get("retry", 0),
                 "retry_delay": meta.get("retry_delay", 0),
                 "retry_backoff": meta.get("retry_backoff", 1),
                 "retry_on": [c.__name__ for c in meta["retry_on"]] if meta.get("retry_on") else None,
                 "continue_on_error": meta.get("continue_on_error", False),
                 "timeout": meta.get("timeout"),
-                "parallel": meta.get("parallel", 1),
-                "wait_seconds": meta.get("wait_seconds") if meta.get("is_wait") else None,
-                "is_start": meta.get("is_start", False),
                 "doc": meta.get("doc", ""),
             }
             for meta in steps.values()

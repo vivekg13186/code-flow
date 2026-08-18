@@ -1,6 +1,7 @@
 <p align="center"><img src="code_flow.png" alt="code flow" width="420"></p>
 
-A tiny **annotation-based workflow engine** in Python with a web UI.
+A tiny **workflow engine** in Python with a web UI — flows are plain
+Python functions, every run is a report you can read later.
 
 ## Demo
 
@@ -18,7 +19,7 @@ A tiny **annotation-based workflow engine** in Python with a web UI.
   whole server farm, a queue, and a big bunch of setup. One process, one
   `pip install`, done.
 - **Just Python.** No proprietary format, no custom DSL — a workflow is a
-  plain Python class with decorators. Flexible to build, and easy to
+  plain Python class with a `@flow` body. Flexible to build, and easy to
   generate with AI later.
 - **Versioned with git.** Flows are code files, so branching, reviewing and
   rolling back come for free — less work to maintain.
@@ -98,113 +99,104 @@ require a rebuild.
 ## Defining a workflow
 
 Drop any `.py` file into the `workflows/` folder — **subfolders included,
-any depth**. Every subclass of `Workflow` with a `@start` step is picked up
+any depth**. Every subclass of `Workflow` with a `@flow` method is picked up
 automatically (no restart needed — the UI re-scans the folder). Files or
 folders starting with `_` are ignored, so `_drafts/` is a handy place for
-work in progress.
+work in progress, and `_lib/` is where shared code goes.
 
 Subfolders double as organization: every folder on a flow's path is added
 to its tags automatically. A flow in `workflows/billing/Invoices.py` gets a
 `billing` tag and shows up under that tag in the UI's tag bar and history
 filters — no need to declare it in the class.
 
-**Sharing code between flows**: the `workflows/` root is on the import
-path, so flow files can import each other and shared modules. The cleanest
-pattern is an underscore folder (ignored by discovery, importable as
-normal):
-
-```
-workflows/
-├── _lib/
-│   └── helpers.py        # def money(amount): ...
-└── billing/
-    └── Invoices.py       # from _lib.helpers import money
-```
-
-Subfolder imports need no `__init__.py` (`from billing.common import x`
-works via namespace packages). Note that a non-underscore helper file is
-also *executed* by the discovery scan — keep shared code in `_lib/` (or any
-`_folder/`) to avoid that.
+**A workflow is a class with one `@flow` body. The body is ordinary
+Python; the `@step` methods it calls are journaled.**
 
 ```python
-from engine import Workflow, start, step
+from dataclasses import dataclass
+from typing import Literal
 
-class MyFlow(Workflow):
+from engine import Workflow, flow, step, parallel_map
+
+@dataclass                            # typed inputs -> a real form + validation
+class DeployInputs:
+    service: Literal["payments", "orders"] = "payments"
+    canary: bool = True
+
+class DeployFlow(Workflow):
     description = "Shown in the UI"
-    tags = ["billing", "demo"]        # group/filter flows & runs in the UI
-    inputs = {"amount": 120}          # default inputs
+    tags = ["devops"]                 # UI grouping/filtering
+    inputs = DeployInputs
 
-    @start(next="Step1")
-    def begin(self, ctx):
-        return {"a": 42}              # returned dicts merge into ctx
+    @flow
+    def main(self, ctx):                               # ctx = inputs + env
+        artifact = self.build(ctx["service"])          # journaled step call
+        hosts = self.discover_hosts(ctx["service"])
 
-    @step(name="Step1", next="Step2", condition="a > 10", retry=10, retry_delay=12)
-    def step1(self, ctx):
-        self.log("only runs when a > 10; retried up to 10x on failure")
+        if ctx["canary"]:                              # a real if
+            self.push(artifact, hosts[0])
+            self.verify(hosts[0])
 
-    @step(name="Step2", loop="i in items")
-    def step2(self, ctx):
-        self.log(f"processing {ctx['i']}")   # runs once per element of ctx["items"]
+        parallel_map(lambda h: self.push(artifact, h), hosts[1:], workers=3)
+
+        try:                                           # a real try/except
+            self.smoke_test(ctx["service"])
+        except Exception:
+            self.rollback(ctx["service"])
+            raise
+
+        return {"deployed": True}                      # merged into outputs
+
+    @step(retry=2, retry_delay=1, retry_backoff=2,
+          retry_on=ConnectionError, timeout=30)
+    def push(self, artifact, host):
+        self.log(f"pushed {artifact} to {host}")
+        return host
 ```
 
-### Decorator reference
+Steps take real arguments and return real values. Control flow is `if`,
+`for`, `while`, `try` — there is no `next=`, `condition=` or `loop=`.
 
-| Parameter     | Meaning                                                            |
-|---------------|--------------------------------------------------------------------|
-| `name`        | Step name referenced by `next=` (defaults to the function name)    |
-| `next`        | Step to run after this one; `None` ends the flow                   |
-| `condition`   | Expression evaluated against the context, e.g. `"a > 10"`. Falsy → step is **SKIPPED**, flow continues with `next` |
-| `loop`        | `"i in items"` — runs the step once per element with `ctx["i"]` set |
-| `retry`       | Number of retries after failure (total attempts = retry + 1)       |
-| `retry_delay` | Seconds to wait between attempts                                   |
-| `retry_backoff` | Multiplier applied to the delay each further attempt (exponential backoff): `retry_delay=2, retry_backoff=3` waits 2s, 6s, 18s… Default 1 = fixed |
-| `parallel`    | For `loop=` steps: run up to N iterations concurrently. Results stay input-ordered in `<Step>_results`; each iteration sees a context snapshot — aggregate from `<Step>_results`, don't use running accumulators |
-| `retry_on`    | Exception class or tuple that is retryable, e.g. `retry_on=(ConnectionError, TimeoutError)`. Other exception types fail the step immediately. Default: everything is retryable |
-| `continue_on_error` | If the step still fails after all attempts, mark it FAILED but continue with `next` instead of aborting the run. The error lands in `ctx["<StepName>_error"]` |
-| `timeout`     | Max seconds per attempt. On expiry the attempt fails with `StepTimeoutError` (a `TimeoutError` subclass — combine with `retry_on=TimeoutError`). The timed-out call is abandoned, not killed — write such steps to be duplicate-safe |
+### `@step` reference
+
+| Parameter | Meaning |
+|-----------|---------|
+| `name`        | Label in the report (defaults to the method name) |
+| `retry`       | Retries after failure (total attempts = retry + 1) |
+| `retry_delay` | Seconds between attempts |
+| `retry_backoff` | Multiplier applied each further attempt: `retry_delay=2, retry_backoff=3` waits 2s, 6s, 18s… Default 1 = fixed |
+| `retry_on`    | Exception class/tuple that is retryable, e.g. `retry_on=(ConnectionError, TimeoutError)`. Other exceptions fail immediately |
+| `continue_on_error` | After all attempts fail, mark the step FAILED and return `None` to the caller instead of raising |
+| `timeout`     | Max seconds per attempt; raises `StepTimeoutError`. The timed-out call is abandoned, not killed — make such steps duplicate-safe |
+
+Retries, timeouts and journaling apply **per call**, so a step called in a
+loop gets independent attempts and its own journal entry per iteration.
+
+### The one rule: keep the body pure
+
+On ⏭ resume the flow body **re-executes from the top** — completed steps
+return their recorded result instantly, so execution effectively continues
+where it stopped. That only works if the body is deterministic:
+
+- Real work and side effects go **inside steps**, never in the body.
+- No `datetime.now()`, `random`, `uuid` in the body — put them in a step, or
+  use `self.sleep(seconds)` which is journaled and cancellable.
+
+`bash scripts/lint.sh` flags violations (rules CF030/CF031).
 
 ### Runtime features
 
-- **Context**: steps receive `ctx` (dict). Dicts returned by a step are merged
-  into it; non-dict results land in `ctx["<StepName>_result"]`. Step names
-  are sanitized for these derived keys — non-identifier characters become
-  underscores, so a step named `"Fetch Data"` produces `Fetch_Data_result`
-  (and `Fetch_Data_results` / `Fetch_Data_error`), usable directly in
-  `condition=` / `loop=` expressions.
-- **Dynamic branching**: return `{"__next__": "OtherStep"}` to pick the next
-  step at runtime.
-- **Tags**: set `tags = ["billing", "demo"]` on a workflow class. The UI shows
-  a tag bar to filter the workflow list, runs inherit their workflow's tags,
-  and the history can be filtered by workflow, status, tag, environment, and
-  with/without sub-runs. Tag chips anywhere are clickable shortcuts.
-- **Secrets in environments**: reference OS environment variables with
-  `"api_token": "${MY_TOKEN}"` in an env JSON file — resolved on the server
-  at load time, so the secret never lives in the file or in git. Masking is
-  automatic in the run dialog, run records, and HTML reports for (a) any
-  `${VAR}`-resolved value and (b) any key whose name looks secret
-  (`*_token`, `*_secret`, `*password*`, `*api_key*`, `*credential*`,
-  `*private*`). Steps always receive the real values via `self.env`. With
-  Docker, put values in a git-ignored `.env` file and pass them through in
-  `docker-compose.yml`. If a referenced var isn't set, the environments API
-  reports a warning and the placeholder stays visible. Don't log secrets
-  with `self.log()` — logs are stored in reports as-is.
-- **Environments**: drop JSON files into `environments/` (e.g. `dev.json`,
-  `prod.json`) and pick one in the run dialog. The values are available in
-  steps as `self.env` / `ctx["env"]`, and in conditions:
-  `condition="not env.get('dry_run')"`. The selected environment is shown in
-  the history and stored in the run report. Sub-workflows inherit the
-  parent's environment (override with `self.call_workflow(..., env="prod")`).
-- **Sub-workflows**: `self.call_workflow("OtherFlow", inputs={...})` runs
-  another workflow from inside a step and returns its outputs. The child run
-  gets its own report and appears in the history marked with ↳. If the child
-  fails the calling step fails (so the step's `retry=` re-runs the whole
-  child). Call cycles (A → B → A) are detected and rejected. See
-  `workflows/Flow3.py`.
+- **Context**: the `@flow` body receives `ctx` — validated inputs plus
+  `ctx["env"]`. Step results are ordinary return values; nothing is
+  auto-merged into a shared dict.
+- **Branching / loops**: plain Python (`if`, `for`, `while`, `try`).
+- **Parallel**: `parallel_map(self.step_method, items, workers=8)` — each
+  call is journaled separately. Threads: good for I/O, not for CPU.
+- **Pausing**: `self.sleep(30)` is cancellable and journaled, so a resumed
+  run does not sleep again.
 - **Logging**: `self.log("...")` lines appear in the HTML execution report.
-  Structured variants: `self.log_json(obj, title="API response")` renders
-  pretty-printed JSON, `self.log_table(rows, title="Processed")` renders a
-  real table (list of dicts or scalars, 200-row cap). A marker line in the
-  text log keeps the chronological context.
+  Structured variants: `self.log_json(obj, title=...)` renders pretty JSON,
+  `self.log_table(rows, title=...)` renders a real table (200-row cap).
 - **Images**: `self.log_image(path_or_bytes_or_figure, title="Sales chart")`
   attaches an image to the step, shown inline in the run's report. Accepts
   file paths (png/jpg/gif/svg/webp), raw bytes (`format="svg"`), data URIs,
@@ -218,17 +210,13 @@ class MyFlow(Workflow):
   even a crashed server leaves an honest partial record. On startup, runs
   that were RUNNING when the previous process died are marked
   **INTERRUPTED** in the history.
-- **Resume from failed step**: FAILED / CANCELLED / INTERRUPTED runs have a
-  ⏭ resume button (and `POST /api/runs/<id>/resume`) — a new run starts at
-  the step where the old one stopped, with the context restored; completed
-  steps are not re-executed. Keep context values JSON-serializable for
-  exact restore (see best practices); a failed loop step re-runs whole.
-  Try it: `workflows/examples/ResumeDemo.py` fails on purpose and tells you
-  how to "fix the outage" and resume. For loops, add `resumable=True` to a
-  sequential `loop=` step and resume continues **at the failed item**
-  instead of re-running the loop from item 1 (checkpointed per iteration;
-  needs a deterministic iterable and JSON-serializable results — see
-  `workflows/examples/ResumableLoop.py`).
+- **Resume**: FAILED / CANCELLED / INTERRUPTED runs have a ⏭ resume button
+  (and `POST /api/runs/<id>/resume`). The flow body replays from the top and
+  every step that already completed returns its recorded result instantly —
+  including loop iterations, so a failed loop continues at the failed item.
+  Completed steps appear in the new report marked "carried over". Keep step
+  results JSON-serializable for an exact restore, and see the rule above
+  about keeping the body pure. Try `workflows/examples/ResumeDemo.py`.
 - **Cancellation**: every RUNNING run has a ✕ cancel button (also
   `POST /api/runs/<id>/cancel`). Cancel is cooperative — it takes effect at
   the next step boundary, loop iteration, retry wait, or timeout poll; a
@@ -264,7 +252,7 @@ The **Dashboards** tab lists dashboard flows; opening one runs the flow and
 renders the widgets in a grid (size `"wide"` spans 2 columns, `"full"` the
 whole row). The toolbar has Refresh, auto-refresh (10s–5m), and an
 environment picker. **Input widgets**: an input bar is generated from the
-flow's `inputs_schema` (or inferred from its `inputs` defaults) — change
+flow's typed `inputs` dataclass (or inferred from plain dict defaults) — change
 the values and Refresh (or press Enter) re-runs the flow with them; typed
 validation applies and auto-refresh uses the current values too.
 **Conditional cell formatting**: table widgets accept `format=` rules —
@@ -277,55 +265,55 @@ don't create history entries (auto-refresh would flood it); use the normal
 Run button for a persisted snapshot with a report. Deep-link a dashboard
 with `/#dashboards/<FlowName>`. See `workflows/examples/OpsDashboard.py`.
 
-### Wait steps
-
-`@wait` pauses the flow for N seconds before moving on — the body runs
-once first (log something, return a dict to merge into ctx), then the
-engine sleeps:
-
-```python
-from engine import Workflow, start, step, wait
-
-@wait(seconds=30, name="Cooldown", next="Verify")
-def cooldown(self, ctx):
-    self.log("letting the deploy settle")
-
-@wait(seconds="retry_after", name="Backoff", next="Fetch")   # from ctx
-def backoff(self, ctx): pass
-```
-
-`seconds` is a number or an expression evaluated against the context. The
-pause is cancellable from the UI, shows as ⏳ in the flow card and diagram,
-and the report records how long it paused. A falsy `condition=` skips the
-step including the pause.
-
 ### Typed inputs
 
-Add an optional `inputs_schema` and the run dialog becomes a proper form
-(text/number/checkbox/dropdown) instead of a JSON box, with validation on
-every start path — UI, API, webhook, scheduler, sub-workflow:
+Declare inputs as a **dataclass** and set `inputs` to the class. The run
+dialog becomes a proper form (text/number/checkbox/dropdown) instead of a
+JSON box, with validation on every start path — UI, API, webhook,
+scheduler, sub-workflow:
 
 ```python
+from dataclasses import dataclass, field
+from typing import Literal, Optional
+
+@dataclass
+class OrderInputs:
+    customer: str                                     # no default => required
+    amount: float = field(default=120.0,
+                          metadata={"min": 0.01, "help": "order total"})
+    priority: Literal["low", "normal", "high"] = "normal"
+    notify: bool = False
+    extra: Optional[dict] = None
+
 class OrderFlow(Workflow):
-    inputs = {"amount": 120, "customer": "ACME Corp"}
-    inputs_schema = {
-        "amount":   {"type": "number", "min": 0.01, "required": True,
-                     "help": "order total"},
-        "customer": {"type": "string", "required": True},
-        "priority": {"type": "select", "options": ["low", "normal", "high"],
-                     "default": "normal"},
-        "notify":   {"type": "boolean", "default": False},
-        "extra":    {"type": "json"},
-    }
+    inputs = OrderInputs        # the class itself, not an instance
 ```
 
-Types: `string` / `number` / `integer` / `boolean` / `select` / `json`.
-Spec keys: `required`, `default`, `min`/`max`, `options`, `help`, `label`.
+The annotation picks the field type:
+
+| annotation | field |
+|---|---|
+| `str` | text |
+| `int` | number (integer) |
+| `float` | number |
+| `bool` | checkbox |
+| `Literal[...]` or an `Enum` subclass | dropdown |
+| `list` / `dict` / anything else | JSON box |
+| `Optional[X]` | `X`, not required |
+
+A field with no default is **required**. Things an annotation can't express
+go in `field(metadata={...})`: `min`, `max`, `help`, `label`, `options`,
+`required`, `type`. `Annotated[int, {"min": 1}]` works too.
+
 Values are coerced (`"42"` → `42`, `"true"` → `True`); bad inputs get a
 `422` with per-field errors from the API, and runs started any other way
 fail fast with a clear validation message instead of a confusing crash
-mid-flow. Keys not in the schema pass through untouched, and the run
-dialog keeps an "edit as JSON" escape hatch.
+mid-flow. Keys not declared pass through untouched, the flow body still
+receives a plain dict `ctx`, and the run dialog keeps an "edit as JSON"
+escape hatch.
+
+Typing is optional: `inputs = {"amount": 120}` still works as plain
+untyped defaults, it just skips validation and renders a generic form.
 
 ### Webhook triggers
 
@@ -384,6 +372,13 @@ The **Schedules** tab lets you run flows automatically:
 - REST API: reference in [`docs/API.md`](docs/API.md), interactive Swagger
   at `/api/docs`
 - Writing flows: see [`docs/BEST_PRACTICES.md`](docs/BEST_PRACTICES.md)
+- **Linting**: `bash scripts/lint.sh` (or `python -m engine.lint workflows`)
+  — catches duplicate step names, missing/duplicate `@flow`, leftover
+  graph-era syntax, `retry=` without `timeout=`, swallowed exceptions,
+  secrets in log lines, import-time side effects, and non-determinism or
+  side effects in a flow body. Exit code 1 on
+  errors; `--strict` also fails on warnings. Run it in pre-commit/CI —
+  especially for AI-generated flows.
 - Generating flows with AI: point your LLM at [`llms.txt`](llms.txt) — a
   complete, compact engine reference (paste it into the prompt and ask for
   the flow you want)
@@ -395,10 +390,11 @@ code-flow/
 ├── app.py            # FastAPI server + REST API
 ├── ui.html           # single-page web UI
 ├── engine/
-│   ├── decorators.py # @start / @step
+│   ├── decorators.py # @flow / @step
 │   ├── workflow.py   # Workflow base class
-│   ├── runner.py     # execution engine (conditions, loops, retries)
+│   ├── runner.py     # execution engine (journal, replay, retries)
 │   ├── registry.py   # auto-discovery of workflows/
+│   ├── lint.py       # codeflow lint
 │   └── reports.py    # HTML reports + history store
 ├── workflows/        # ← your flows live here (subfolders = groups/tags)
 │   ├── Flow.py

@@ -1,206 +1,195 @@
 # code flow
 
-> A tiny annotation-based workflow engine in Python with a web UI. Workflows
-> are plain Python classes with decorated methods — no DSL. This file is a
-> complete, accurate reference for LLMs generating or editing flows.
+> A tiny workflow engine in Python. A workflow is a class with one @flow
+> body of ordinary Python; the @step methods it calls are journaled, so a
+> resumed run replays the body and completed steps return instantly.
+> This file is a complete, accurate reference for LLMs writing flows.
 
-## What a workflow is
+## Anatomy
 
-Drop a `.py` file anywhere under `workflows/` (subfolders scanned recursively;
-each folder on the path is auto-added to the flow's tags; files/folders
-starting with `_` are ignored — put shared code in `workflows/_lib/` and
-import it as `from _lib.helpers import x`). The folder is re-scanned on every
-request, so edits apply without a restart.
+Drop a `.py` file anywhere under `workflows/` (subfolders scanned
+recursively; each folder on the path becomes a tag; files/folders starting
+with `_` are ignored — shared code goes in `workflows/_lib/`, imported as
+`from _lib.helpers import x`). The folder is re-scanned per request, so
+edits apply without a restart.
 
 ```python
-from engine import Workflow, start, step, wait
+from dataclasses import dataclass, field
+from typing import Literal
+from engine import Workflow, flow, step, parallel_map
 
-class MyFlow(Workflow):
+@dataclass                                # typed inputs (optional but preferred)
+class DeployInputs:
+    service: Literal["payments", "orders"] = "payments"   # -> select
+    replicas: int = field(default=3, metadata={"min": 1, "max": 20})
+    canary: bool = True
+    # str->string  int->integer  float->number  bool->boolean
+    # Literal/Enum->select  list/dict/other->json  Optional[X]->X not required
+    # no default => required; extras via field(metadata={min,max,help,label,
+    # options,required,type}) or Annotated[int, {"min": 1}]
+
+class DeployFlow(Workflow):
     description = "Shown in the UI"
-    tags = ["billing"]                    # UI grouping/filtering
-    inputs = {"amount": 120}              # default inputs, overridable per run
-    inputs_schema = {                     # optional: typed inputs -> UI form + validation
-        "amount": {"type": "number", "min": 1, "required": True, "help": "order total"},
-        "priority": {"type": "select", "options": ["low", "normal", "high"],
-                     "default": "normal"},
-        # types: string | number | integer | boolean | select | json
-        # keys: required, default, min, max, options, help, label
-    }
-    dashboard = False                     # True => appears in Dashboards tab
-    webhook = False                       # True => POST /api/hooks/MyFlow starts it
+    tags = ["devops"]                     # UI grouping/filtering
+    inputs = DeployInputs                 # the CLASS, not an instance.
+                                          # a plain dict = untyped defaults
+    dashboard = False                     # True => Dashboards tab
+    webhook = False                       # True => POST /api/hooks/DeployFlow
     # webhook_token = "secret"            # optional per-flow webhook auth
 
-    @start(next="Step1")
-    def begin(self, ctx):
-        return {"a": 42}                  # returned dicts merge into ctx
+    @flow                                 # EXACTLY ONE per class
+    def main(self, ctx):                  # ctx = validated inputs + ctx["env"]
+        art = self.build(ctx["service"])          # journaled step call
+        hosts = self.discover_hosts(ctx["service"])
+        if ctx["canary"]:                          # real if
+            self.push(art, hosts[0])
+        for h in hosts[1:]:                        # real for
+            self.push(art, h)
+        parallel_map(lambda h: self.push(art, h), hosts, workers=4)
+        try:                                       # real try/except
+            self.smoke_test()
+        except Exception:
+            self.rollback(); raise
+        return {"deployed": True}                  # dict return -> outputs
 
-    @step(name="Step1", next="Step2", condition="a > 10", retry=3,
-          retry_delay=2, retry_backoff=2, retry_on=(ConnectionError,),
-          timeout=30, continue_on_error=False)
-    def step1(self, ctx):
-        self.log("text log line")
-        return {"b": ctx["a"] * 2}
-
-    @step(name="Step2", loop="i in items", parallel=4)
-    def step2(self, ctx):
-        return {"item": ctx["i"], "ok": True}   # per-item result
-
-    @wait(seconds=30, name="Cooldown", next="Done")   # pause, then continue
-    def cooldown(self, ctx): pass                     # seconds may be "expr"
-
-    @step(name="Done")
-    def done(self, ctx):
-        self.outputs({"total": ctx["b"]})     # recorded workflow outputs
+    @step(retry=3, retry_delay=2, retry_backoff=2,
+          retry_on=(ConnectionError, TimeoutError),
+          timeout=30, continue_on_error=False, name="Push")
+    def push(self, artifact: str, host: str) -> str:
+        self.log(f"pushed {artifact} to {host}")
+        return host
 ```
 
-## Decorator reference
+## Rules that matter
 
-@start(next=None, name=None, retry=0, retry_delay=0, retry_backoff=1,
-       retry_on=None, continue_on_error=False, timeout=None)
-@step(name=None, next=None, condition=None, loop=None, retry=0, retry_delay=0,
-      retry_backoff=1, retry_on=None, continue_on_error=False, timeout=None,
-      parallel=1, resumable=False)
-@wait(seconds, name=None, next=None, condition=None)
+1. Exactly one `@flow` method; signature `(self, ctx)`. Without it the class
+   is not discovered.
+2. Steps take ordinary args and return ordinary values. Nothing is merged
+   into a shared context — use variables.
+3. **The body must be pure and deterministic.** On resume it re-executes
+   from the top (completed steps return from the journal). So:
+   - real work and side effects go inside `@step` methods;
+   - no `datetime.now()`, `random`, `uuid`, file writes or HTTP in the body;
+   - `self.sleep(sec)` instead of `time.sleep` (journaled + cancellable).
+4. Retries/timeouts/journaling are **per call**: a step called in a loop
+   gets independent attempts and one journal entry per iteration, so a
+   failed loop resumes at the failed item.
+5. `next=`, `condition=`, `loop=`, `parallel=`, `resumable=`, `@start`,
+   `@wait` and `inputs_schema` were REMOVED. Use Python / a dataclass.
+6. `inputs` is a dataclass TYPE or a plain dict — never an instance. The
+   body always gets a plain dict `ctx`, so `ctx["service"]`, not `ctx.service`.
 
-- name: step id referenced by next= (default: function name). Display keeps
-  spaces, but derived ctx keys sanitize non-identifier chars to "_":
-  step "Fetch Data" -> ctx["Fetch_Data_result"] / _results / _error.
-- next: name of the next step; None ends the flow. Runtime branch: return
-  {"__next__": "OtherStep"} from a step. Exactly one @start per flow.
-- condition: Python expression evaluated against ctx (bare names = ctx keys;
-  env available as `env`). Falsy => step SKIPPED, flow continues with next.
-- loop: "var in expr" — expr evaluated against ctx once at loop start. Each
-  iteration: ctx[var] = item; returned dicts merge into ctx as they complete;
-  all results collected in ctx["<Step>_results"] (input order).
-- retry/retry_delay/retry_backoff: attempts = retry+1, delay grows
-  delay*backoff^(attempt-1). retry_on: exception class/tuple that is
-  retryable; other exceptions fail immediately. Retries apply PER loop
-  iteration.
-- timeout: max seconds per attempt; raises StepTimeoutError (TimeoutError
-  subclass). Timed-out call is abandoned, not killed — make it idempotent.
-- continue_on_error: after all attempts fail, mark step FAILED but continue
-  with next; error stored in ctx["<Step>_error"].
-- parallel=N: loop iterations run concurrently on threads, each on a ctx
-  SNAPSHOT. Do NOT use running accumulators with parallel; aggregate from
-  <Step>_results in the next step. Any failed iteration fails the step.
-- resumable=True (sequential loops only): checkpoint each iteration so
-  ⏭ resume continues at the failed item. Needs deterministic iterable and
-  JSON-serializable results. Incompatible with parallel>1.
-- wait: body runs once (dict return merges), then pauses `seconds` (number
-  or ctx expression), then next. Cancellable; condition falsy skips pause.
+## @step parameters
 
-## Workflow instance API (inside steps)
+name · retry · retry_delay · retry_backoff · retry_on · continue_on_error
+(returns None instead of raising after all attempts) · timeout (raises
+StepTimeoutError; the attempt is abandoned, not killed — keep such steps
+duplicate-safe).
 
-self.log(msg)                        # text line in the step's report
-self.log_json(obj, title="")         # pretty JSON block in the report
-self.log_table(rows, title="")       # list[dict] -> real table (200-row cap)
-self.log_image(src, title="", format="png")  # path | bytes | data-URI |
-                                     # matplotlib figure; embeds base64 in the
-                                     # report (3MB/img, 20/step)
-self.outputs({"k": v})               # merge into workflow outputs
-self.widget(type, **props)           # dashboards, see below
+## Workflow API (inside body or steps)
+
+self.log(msg) · self.log_json(obj, title="") · self.log_table(rows, title="")
+self.log_image(path|bytes|data-URI|matplotlib fig, title="", format="png")
+self.outputs({...})            # merge into run outputs
+self.widget(type, **props)     # dashboards
+self.sleep(seconds)            # journaled, cancellable
+self.env                       # selected environment dict (real values)
 self.call_workflow("Other", inputs={...}, env=None)
-    # runs child flow synchronously; returns its outputs dict; child gets its
-    # own run+report (marked ↳ in history); raises if child fails; inherits
-    # parent env unless env="name"; cycles detected; cancel cascades.
-self.env                             # selected environment dict (real values)
-
-## Context (ctx) rules
-
-- ctx starts as inputs (class defaults merged with per-run inputs, validated/
-  coerced by inputs_schema if present). ctx["env"] = environment dict.
-- A step returning a dict merges it into ctx; non-dict return lands in
-  ctx["<Step>_result"]. Loops also set ctx["<Step>_results"] (list).
-- Keep values JSON-serializable and small: the report's Context section
-  truncates >2KB values; resume restores ctx from JSON (non-JSON degrade to
-  str). Secret-looking keys (*token*, *secret*, *password*, *api_key*,
-  *credential*, *private*) are masked in reports but NOT in self.log lines —
-  never log secrets.
+    # child run with its own report (↳ in history); returns its outputs;
+    # raises if it fails; inherits env unless env="name"; cycles detected
+parallel_map(self.step_method, items, workers=4)   # module-level import
 
 ## Environments & secrets
 
-environments/*.json — file name = env name, picked per run in the UI/API.
-Values may reference OS env vars: "api_token": "${MY_TOKEN}" (resolved at
-load; missing var -> warning, placeholder kept). ${}-resolved values and
-secret-named keys are masked in UI/reports; steps get real values.
-Common flag: "dry_run": true + condition="not env.get('dry_run')".
+`environments/*.json` — file name = env name, chosen per run. Values may
+reference OS env vars: `"api_token": "${MY_TOKEN}"` (resolved at load;
+missing var -> warning). ${}-resolved values and secret-named keys
+(*token*, *secret*, *password*, *api_key*, *credential*, *private*) are
+masked in UI/reports but NOT in `self.log` lines — never log secrets.
+Common flag: `"dry_run": true` + `if not self.env.get("dry_run"):`.
 
 ## Dashboards
 
-Set dashboard=True; steps build widgets with self.widget(...). Refresh in the
-Dashboards tab re-runs the flow transiently (no history entry). Input widgets
-are generated from inputs_schema (or inferred from inputs defaults).
-Widget types: metric(value), stat(value, delta), status(value, status=
-ok|warn|err|neutral), progress(value, max), table(rows, format=[...]),
-chart(chart=bar|line|area|pie, data=dict|list), list(items), alert(text,
-level=info|warn|error), text(text), json(value), html(html), link(url),
-section(title). size: "" | "wide" (2 cols) | "full" (row).
-Table conditional formatting: format=[{"col": "status", "map": {"paid": "ok"}},
-{"col": "amount", "gt": 300, "style": "err"}]; ops eq/ne/gt/gte/lt/lte/
-contains; styles ok|warn|err|info|muted; first match wins.
+`dashboard = True`; build widgets in steps with `self.widget(...)`. Refresh
+re-runs the flow transiently (no history entry). Input widgets come from
+the inputs dataclass (or inferred from dict defaults). Types: metric(value) ·
+stat(value, delta) · status(value, status=ok|warn|err|neutral) ·
+progress(value, max) · table(rows, format=[...]) · chart(chart=bar|line|
+area|pie, data=dict|list) · list(items) · alert(text, level=info|warn|error)
+· text · json(value) · html · link(url) · section(title). size: "" | "wide"
+| "full". Table formatting: `format=[{"col":"status","map":{"paid":"ok"}},
+{"col":"amount","gt":300,"style":"err"}]`; ops eq/ne/gt/gte/lt/lte/contains;
+styles ok|warn|err|info|muted; first match wins.
 
-## Failure & resume semantics
+## Failure & history
 
-- A step fails by RAISING. Run then stops (unless continue_on_error).
-- Sequential loop failure: completed iterations' merges are already in ctx;
-  <Step>_results is NOT set; remaining items don't run.
-- Parallel loop failure: nothing merged (all-or-nothing).
-- History actions: ↺ restart (same inputs/env, from the start), ⏭ resume
-  (FAILED/CANCELLED/INTERRUPTED: new run starting AT the stopped step with
-  ctx restored from history/<id>.resume.json; completed steps shown as
-  "carried over"; env re-resolved fresh; failed loop re-runs from item 1
-  unless resumable=True).
-- Prefer marker pattern for tolerant loops: catch inside the body, return
-  {"item": x, "ok": False, "error": str(e)} instead of raising.
+A step fails by RAISING; the run stops unless `continue_on_error=True`
+(which returns None to the caller). History actions: ↺ restart (fresh run,
+same inputs/env) · ⏭ resume (replays the body; completed steps show as
+"carried over") · cancel (cooperative: takes effect at the next step
+boundary, or within ~0.25s inside a step that has `timeout=`).
+Tolerant loops: catch inside the step and return a marker
+(`{"item": x, "ok": False, "error": ...}`) instead of raising.
 
 ## Scheduler & webhooks
 
-Schedules tab / API: {"flow", "type": "interval"|"daily", "every_minutes" |
-"time"+"days"(0=Mon..6=Sun), "inputs", "env", "enabled"}. Server-local time;
-overlap guard skips a fire while the previous run is still RUNNING.
-Webhook: flow sets webhook=True; POST /api/hooks/<Flow> with JSON body as
-inputs (?env=, token via X-Webhook-Token or ?token=; per-flow webhook_token
-or global CODEFLOW_WEBHOOK_TOKEN).
+Schedules: `{"flow", "type": "interval"|"daily", "every_minutes" |
+"time"+"days"(0=Mon..6=Sun), "inputs", "env", "enabled"}`; server-local
+time; an overlap guard skips a fire while the previous run is RUNNING.
+Webhook: `webhook = True`, then `POST /api/hooks/<Flow>` with the JSON body
+as inputs (`?env=`, token via `X-Webhook-Token` or `?token=`; per-flow
+`webhook_token` or global `CODEFLOW_WEBHOOK_TOKEN`).
 
-## REST API (summary — full doc: docs/API.md)
+## REST API (full doc: docs/API.md)
 
-GET  /api/flows                       POST /api/run/<flow> {"inputs", "env"}
-GET  /api/runs                        GET  /api/runs/<id>
-POST /api/runs/<id>/cancel            POST /api/runs/<id>/restart
-POST /api/runs/<id>/resume            DELETE /api/runs/<id> | /api/runs
-POST /api/runs/bulk-delete            GET  /api/environments
-POST /api/dashboards/<flow>/render    GET/POST/PATCH/DELETE /api/schedules...
-POST /api/hooks/<flow>                GET  /reports/<id>  (HTML report)
-Statuses: RUNNING SUCCESS FAILED CANCELLED INTERRUPTED (+ step: SKIPPED).
-Errors: {"detail": ...}; typed-input failures: 422 with
-{"detail": {"message", "errors": {field: msg}}}.
+GET  /api/flows                     POST /api/run/<flow> {"inputs","env"}
+GET  /api/runs                      GET  /api/runs/<id>
+POST /api/runs/<id>/cancel          POST /api/runs/<id>/restart
+POST /api/runs/<id>/resume          DELETE /api/runs/<id> | /api/runs
+POST /api/runs/bulk-delete          GET  /api/environments
+POST /api/dashboards/<flow>/render  GET/POST/PATCH/DELETE /api/schedules...
+POST /api/hooks/<flow>              GET  /reports/<id>   (HTML report)
+Statuses: RUNNING SUCCESS FAILED CANCELLED INTERRUPTED.
+Typed-input failures: 422 `{"detail":{"message","errors":{field:msg}}}`.
+
+## Linting (run after generating a flow)
+
+`python -m engine.lint workflows` (exit 1 on errors; `--strict` fails on
+warnings; `--json`). Rules: CF001 duplicate step name · CF002 no @flow ·
+CF003 multiple @flow · CF004 removed graph argument (next/condition/loop/
+parallel/resumable) · CF005 @start/@wait removed · CF020 inputs_schema
+removed · CF021 inputs is a class but not a @dataclass · CF010 retry= without
+timeout= · CF011 swallowed exception in a step · CF012 possible secret in a
+log line · CF013 call at import time · CF014 missing description · CF030
+non-determinism in a body · CF031 side effect in a body.
 
 ## Config (env vars / .codeflow.env)
 
-CODEFLOW_WORKFLOWS_DIR, CODEFLOW_ENVIRONMENTS_DIR, CODEFLOW_HISTORY_DIR,
-CODEFLOW_HISTORY_LIMIT (default 500), CODEFLOW_HOST/PORT (127.0.0.1:8000),
-CODEFLOW_WEBHOOK_TOKEN, CODEFLOW_SCHEDULES_FILE. No authentication — keep on
-localhost/Tailscale. requests, PyYAML, dirtyjson preinstalled; add more to
-requirements.txt.
+CODEFLOW_WORKFLOWS_DIR · CODEFLOW_ENVIRONMENTS_DIR · CODEFLOW_HISTORY_DIR ·
+CODEFLOW_HISTORY_LIMIT (500) · CODEFLOW_HOST/PORT (127.0.0.1:8000) ·
+CODEFLOW_WEBHOOK_TOKEN · CODEFLOW_SCHEDULES_FILE. No authentication — keep
+on localhost/Tailscale. requests, PyYAML, dirtyjson preinstalled.
 
-## Pitfalls (verified behaviors)
+## Pitfalls (verified)
 
-- Two steps with the same name=: the second silently wins.
-- condition is evaluated BEFORE the step runs, against pre-step ctx.
-- Loop iterable evaluated once; mutating it mid-loop misbehaves.
-- next= typo -> run fails at that point with "Unknown step"; the flow
-  diagram shows a ⚠ node.
-- Cycles via next= abort at 1000 steps.
-- Parent retry= around call_workflow re-runs the ENTIRE child (multiplies
-  with child retries).
+- Two steps with the same name=: the second silently wins (CF001).
+- Side effects or `now()`/`random` in the body re-run on resume (CF030/031).
+- Step results must be JSON-serializable to restore exactly on resume.
+- A timed-out step call is abandoned, not killed — make it duplicate-safe.
+- `parallel_map` uses threads: I/O yes, CPU no.
+- Parent `retry=` around `call_workflow` re-runs the ENTIRE child and
+  multiplies with the child's own retries.
 - Module top-level code runs on every folder scan — keep it side-effect free.
+- Runs are capped at 10,000 step calls (runaway-loop guard).
+- An Enum-typed input carries its `.value` in ctx, not the member.
+- A dataclass with an unresolvable annotation surfaces as `inputs_error`
+  on the flow and an empty form — keep annotations importable.
 
-## Files
+## Examples in workflows/
 
-- docs/API.md — full REST reference     - docs/BEST_PRACTICES.md — patterns
-- workflows/ examples: Flow.py (condition/retry/branch), Flow2.py (loop/
-  dynamic next/structured logs), Flow3.py (sub-workflows), examples/:
-  HelloFlow (shared lib + log_image), OpsDashboard (widgets+inputs),
-  ParallelFetch (parallel+backoff+webhook), RetryDemo (retry_on/
-  continue_on_error), ResumeDemo (resume), ResumableLoop (resumable=True),
-  LoopPatterns (tolerant-loop patterns), WaitDemo-style usage in README.
+Flow.py (if/else + retry + dry-run) · Flow2.py (loop + branch + structured
+logs) · Flow3.py (sub-workflows) · examples/HelloFlow (shared _lib +
+log_image) · examples/OpsDashboard (widgets + inputs) ·
+examples/ParallelFetch (parallel_map + backoff + webhook) ·
+examples/RetryDemo (retry_on + continue_on_error) · examples/ResumeDemo
+(resume, incl. inside a loop) · examples/LoopPatterns (tolerant loops).

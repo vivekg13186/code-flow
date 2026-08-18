@@ -288,20 +288,15 @@ def resume_run(run_id: str):
         raise HTTPException(404, "No resume state for this run")
     state = _json.loads(resume_path.read_text(encoding="utf-8"))
 
-    # find the step where the run stopped
-    stopped = [s for s in state.get("steps", [])
-               if s.get("status") in ("FAILED", "CANCELLED", "INTERRUPTED")]
-    if not stopped:
-        raise HTTPException(409, "Run has no failed/cancelled step — use restart instead")
-    start_at = stopped[-1]["name"]
-
     flow_name = state.get("workflow")
     registry, _ = _get_registry()
     cls = registry.get(flow_name)
     if cls is None:
         raise HTTPException(404, f"Workflow no longer exists: {flow_name}")
-    if start_at not in cls.collect_steps():
-        raise HTTPException(409, f"Step {start_at!r} no longer exists in {flow_name}")
+
+    # replay: the journal decides where execution effectively continues
+    if not state.get("journal"):
+        raise HTTPException(409, "Nothing completed to resume from — use restart")
 
     env_name = state.get("environment")
     env = None
@@ -311,28 +306,14 @@ def resume_run(run_id: str):
             raise HTTPException(404, f"Environment no longer exists: {env_name}")
         env = envs[env_name]
 
-    # carry the completed steps (before the stop point) into the new report
-    prior_steps = []
-    record_path = HISTORY_DIR / f"{run_id}.json"
-    if record_path.exists():
-        try:
-            old = _json.loads(record_path.read_text(encoding="utf-8"))
-            for s in old.get("steps", []):
-                if s.get("name") == start_at and s.get("status") in (
-                        "FAILED", "CANCELLED", "INTERRUPTED"):
-                    break
-                prior_steps.append(s)
-        except Exception:  # noqa: BLE001 - inheritance is best-effort
-            prior_steps = []
-
     new_id = _launch(cls, state.get("inputs") or {}, env=env, env_name=env_name,
-                     resume={"ctx": state.get("ctx") or {}, "start_at": start_at,
-                             "from_run": run_id, "prior_steps": prior_steps,
-                             "loop_progress": state.get("loop_progress") or {}})
+                     resume={"from_run": run_id,
+                             "journal": state.get("journal") or {}})
     if not new_id:
         raise HTTPException(500, "Workflow failed to start")
     return {"run_id": new_id, "workflow": flow_name, "environment": env_name,
-            "resumed_from": run_id, "resumed_at_step": start_at}
+            "resumed_from": run_id,
+            "completed_steps_skipped": len(state.get("journal") or {})}
 
 
 @app.delete("/api/runs/{run_id}")

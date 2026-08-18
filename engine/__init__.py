@@ -1,31 +1,36 @@
-"""code-flow: a tiny annotation-based workflow engine.
+"""code flow: a tiny workflow engine where flows are plain Python.
 
-Define workflows as classes with @start / @step decorated methods:
+A workflow is a class with one @flow body; the steps it calls are journaled,
+so a resumed run replays the body and completed steps return instantly.
 
-    from engine import Workflow, start, step
+    from engine import Workflow, flow, step, parallel_map
 
     class MyFlow(Workflow):
-        @start(next="Step1")
-        def begin(self, ctx):
-            return {"a": 42}
+        description = "Shown in the UI"
+        inputs = {"service": "payments"}
 
-        @step(name="Step1", next="Step2", condition="a > 10", retry=3, retry_delay=2)
-        def step1(self, ctx):
+        @flow
+        def main(self, ctx):
+            art = self.build(ctx["service"])
+            for host in self.hosts(ctx["service"]):
+                self.push(art, host)
+            return {"deployed": True}
+
+        @step(retry=3, retry_delay=2, retry_on=ConnectionError, timeout=30)
+        def push(self, artifact, host):
             ...
-
-        @step(name="Step2", loop="i in items")
-        def step2(self, ctx):
-            print(ctx["i"])
 """
-from .decorators import start, step, wait
+from .decorators import flow, step
 from .workflow import Workflow
-from .runner import WorkflowRunner, RunRecord, StepRecord, StepTimeoutError
+from .runner import (WorkflowRunner, RunRecord, StepRecord, StepTimeoutError,
+                     NondeterminismError, parallel_map)
 from .registry import discover_workflows
 
 __all__ = [
-    "start",
+    "flow",
     "step",
-    "wait",
+    "parallel_map",
+    "NondeterminismError",
     "Workflow",
     "WorkflowRunner",
     "RunRecord",

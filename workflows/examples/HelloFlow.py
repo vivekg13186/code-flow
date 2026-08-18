@@ -3,7 +3,7 @@
 The folder name ("examples") is added to this flow's tags automatically,
 so subfolders act as groups in the UI.
 """
-from engine import Workflow, start, step
+from engine import Workflow, flow, step
 
 from _lib.helpers import shout  # shared code from workflows/_lib/
 
@@ -12,13 +12,15 @@ class HelloFlow(Workflow):
     description = "Minimal flow living in a subfolder (auto-tagged 'examples')"
     inputs = {"who": "world"}
 
-    @start(next="Greet")
-    def begin(self, ctx):
+    @flow
+    def main(self, ctx):
         self.log("hello flow starting")
+        message = self.greet(ctx["who"])
+        return {"message": message}
 
-    @step(name="Greet")
-    def greet(self, ctx):
-        message = shout(f"Hello, {ctx['who']}")
+    @step()
+    def greet(self, who):
+        message = shout(f"Hello, {who}")
         self.log(message)
         # log_image: attach an image to this step — it shows up inline in
         # the run's HTML report (also accepts file paths, bytes, data URIs
@@ -28,4 +30,4 @@ class HelloFlow(Workflow):
                f'<text x="130" y="40" font-size="20" font-family="sans-serif" '
                f'text-anchor="middle" fill="#4338ca">{message}</text></svg>')
         self.log_image(svg.encode(), title="greeting badge", format="svg")
-        self.outputs({"message": message})
+        return message

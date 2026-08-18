@@ -1,82 +1,91 @@
-"""Three RESUME-FRIENDLY LOOP PATTERNS, runnable side by side.
+"""Three patterns for loops that tolerate failure.
+
+Resume already replays completed iterations from the journal, so a failed
+loop continues at the failed item. These patterns handle the other half:
+what to do when an *item* is bad rather than the run.
 
 Run it once — everything processes. Run it AGAIN — patterns 2 and 3 skip
-the work that's already done (that's exactly what makes a failed/resumed
-loop safe). Delete the scratch folder to reset the demo:
+the work that is already done. Reset with:
 
     rm -rf $TMPDIR/codeflow-loop-demo      (macOS/Linux)
-
-Why these patterns matter: a loop step that fails is re-run FROM THE FIRST
-ITEM on retry/resume. These three shapes make that harmless.
 """
 import tempfile
 from pathlib import Path
 
-from engine import Workflow, start, step
+from engine import Workflow, flow, parallel_map, step
 
 OUT = Path(tempfile.gettempdir()) / "codeflow-loop-demo"
 
 
 class LoopPatternsFlow(Workflow):
-    description = "Resume-friendly loops: markers · idempotent items · filter-then-loop"
+    description = "Tolerant loops: markers · idempotent items · filter-then-loop"
     tags = ["demo"]
     inputs = {"items": ["a", "b", "c", "d", "e"], "fail_on": "c"}
 
-    @start(next="Markers")
-    def begin(self, ctx):
+    @flow
+    def main(self, ctx):
+        self.prepare()
+
+        # -- Pattern 1: MARKERS — an iteration never raises ----------------
+        # Catch inside the step and return an ok/error marker. The loop
+        # always completes and YOU decide later what a partial failure
+        # means. Works with parallel_map too.
+        marked = parallel_map(
+            lambda i: self.try_item(i, ctx["fail_on"]), ctx["items"], workers=2)
+        failed = [r["item"] for r in marked if not r["ok"]]
+
+        # -- Pattern 2: IDEMPOTENT ITEMS — skip work already done ----------
+        # Each step checks for its own output first, so a re-run (or a
+        # resume that re-executes an item) is a no-op.
+        skipped = []
+        for item in ctx["items"]:
+            if self.write_once(item)["skipped"]:
+                skipped.append(item)
+
+        # -- Pattern 3: FILTER THEN LOOP — recompute remaining work --------
+        # Ask reality what is left; the loop only ever sees unfinished work.
+        remaining = self.remaining(ctx["items"])
+        for item in remaining:
+            self.finish(item)
+
+        self.log_table(marked, title="Pattern 1 — marker results")
+        if failed:
+            self.log(f"partial failure is a decision: {failed} failed — "
+                     "alert, retry later, or raise here if it is fatal")
+        return {"marker_failures": failed,
+                "idempotent_skipped": skipped,
+                "processed_this_run": remaining}
+
+    @step()
+    def prepare(self):
         OUT.mkdir(exist_ok=True)
         self.log(f"scratch folder: {OUT}")
 
-    # ---- Pattern 1: MARKERS — an iteration never raises -------------------
-    # Catch inside the body and return an ok/error marker. The loop always
-    # completes, every item lands in Markers_results, and YOU decide later
-    # what a partial failure means. Works with parallel= too.
-    @step(name="Markers", next="Idempotent", loop="i in items", parallel=2)
-    def markers(self, ctx):
-        item = ctx["i"]
+    @step()
+    def try_item(self, item, fail_on):
         try:
-            if item == ctx["fail_on"]:
+            if item == fail_on:
                 raise ConnectionError(f"simulated API failure for {item!r}")
             return {"item": item, "ok": True, "value": item.upper()}
-        except Exception as e:  # noqa: BLE001 - converted to a marker
-            return {"item": item, "ok": False, "error": str(e)}
+        except Exception as exc:  # noqa: BLE001 - converted to a marker
+            return {"item": item, "ok": False, "error": str(exc)}
 
-    # ---- Pattern 2: IDEMPOTENT ITEMS — skip work that's already done ------
-    # Each iteration checks for its own output first. A re-run (retry or
-    # resume) flies through finished items, so re-processing is a no-op.
-    @step(name="Idempotent", next="Filter", loop="i in items")
-    def idempotent(self, ctx):
-        marker = OUT / f"{ctx['i']}.txt"
+    @step()
+    def write_once(self, item):
+        marker = OUT / f"{item}.txt"
         if marker.exists():
-            self.log(f"{ctx['i']}: output exists — skipping")
-            return {"item": ctx["i"], "skipped": True}
-        marker.write_text(ctx["i"].upper())
-        return {"item": ctx["i"], "skipped": False}
+            self.log(f"{item}: output exists — skipping")
+            return {"item": item, "skipped": True}
+        marker.write_text(item.upper())
+        return {"item": item, "skipped": False}
 
-    # ---- Pattern 3: FILTER THEN LOOP — recompute remaining work -----------
-    # A step before the loop asks reality what's left; the loop only ever
-    # sees unfinished items. On resume the filter re-runs and shrinks.
-    @step(name="Filter", next="Process")
-    def filter_remaining(self, ctx):
-        remaining = [i for i in ctx["items"] if not (OUT / f"{i}.done").exists()]
-        self.log(f"{len(remaining)} of {len(ctx['items'])} item(s) still to process")
-        return {"remaining": remaining}
+    @step()
+    def remaining(self, items):
+        left = [i for i in items if not (OUT / f"{i}.done").exists()]
+        self.log(f"{len(left)} of {len(items)} item(s) still to process")
+        return left
 
-    @step(name="Process", next="Summary", loop="i in remaining")
-    def process(self, ctx):
-        (OUT / f"{ctx['i']}.done").write_text("ok")
-        return {"item": ctx["i"]}
-
-    # ---- Aggregate from <Step>_results, never from running accumulators ---
-    @step(name="Summary")
-    def summary(self, ctx):
-        self.log_table(ctx["Markers_results"], title="Pattern 1 — marker results")
-        failed = [r["item"] for r in ctx["Markers_results"] if not r["ok"]]
-        self.outputs({
-            "marker_failures": failed,
-            "idempotent_skipped": [r["item"] for r in ctx["Idempotent_results"] if r["skipped"]],
-            "processed_this_run": [r["item"] for r in ctx["Process_results"]],
-        })
-        if failed:
-            self.log(f"partial failure is now a decision: {failed} failed — "
-                     "alert, retry later, or raise here if it's fatal")
+    @step()
+    def finish(self, item):
+        (OUT / f"{item}.done").write_text("ok")
+        return item

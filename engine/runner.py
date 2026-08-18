@@ -1,10 +1,15 @@
-"""Workflow execution engine: conditions, loops, retries, next-step chaining."""
+"""Workflow execution engine.
+
+A run executes the workflow's @flow body once. Every @step call made by the
+body is journaled (key -> result); a resumed run replays the body with the
+journal preloaded, so completed steps return instantly and execution
+effectively continues where it stopped.
+"""
 from __future__ import annotations
 
 import concurrent.futures
-import inspect
+import hashlib
 import json
-import re
 import threading
 import time
 import traceback
@@ -15,76 +20,77 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .workflow import Workflow
 
-MAX_STEPS = 1000  # safety net against accidental infinite chains
-CANCEL_POLL_SECONDS = 0.25  # how often a waiting step checks for cancellation
+CANCEL_POLL_SECONDS = 0.25   # how often waiting code checks for cancellation
+MAX_STEP_CALLS = 10_000      # runaway-loop guard
 
 
 class StepTimeoutError(TimeoutError):
     """Raised when a step attempt exceeds its timeout= budget."""
 
 
+class NondeterminismError(RuntimeError):
+    """A replayed body took a different path than the run it resumed from."""
+
+
 class RunCancelled(BaseException):
     """Raised internally when a run is cancelled. Inherits BaseException so
-    that step-level `except Exception` handling (retries, continue_on_error)
-    cannot swallow a cancellation."""
-
-_SAFE_BUILTINS = {
-    "len": len, "min": min, "max": max, "sum": sum, "abs": abs,
-    "round": round, "range": range, "sorted": sorted, "any": any,
-    "all": all, "int": int, "float": float, "str": str, "bool": bool,
-    "list": list, "dict": dict, "set": set, "enumerate": enumerate,
-    "zip": zip, "True": True, "False": False, "None": None,
-}
+    step-level ``except Exception`` handling cannot swallow it."""
 
 
-def _eval_expr(expr: str, ctx: Dict[str, Any]) -> Any:
-    """Evaluate a small Python expression against the workflow context."""
-    return eval(expr, {"__builtins__": _SAFE_BUILTINS}, dict(ctx))
+def parallel_map(step_method: Callable, items, workers: int = 4) -> List[Any]:
+    """Run a @step method over items concurrently.
 
+        results = parallel_map(self.fetch, urls, workers=8)
 
-def _ctx_key(step_name: str) -> str:
-    """Derive a valid identifier from a step name for ctx keys:
-    'Fetch Data' -> 'Fetch_Data' (so conditions can use Fetch_Data_result)."""
-    return re.sub(r"\W+", "_", step_name).strip("_")
-
-
-def _parse_loop(loop: str):
-    """Parse 'i in items' -> ('i', 'items')."""
-    m = re.match(r"^\s*([A-Za-z_]\w*)\s+in\s+(.+?)\s*$", loop)
-    if not m:
-        raise ValueError(f"Invalid loop expression: {loop!r} (expected 'var in iterable')")
-    return m.group(1), m.group(2)
+    Each call is journaled separately, so a resume re-executes only the
+    calls that did not complete. Threads — good for I/O, not for CPU.
+    Results come back in input order; the first failure propagates.
+    """
+    items = list(items)
+    out: List[Any] = [None] * len(items)
+    if not items:
+        return out
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, workers), thread_name_prefix="codeflow-pmap") as pool:
+        futs = {pool.submit(step_method, it): i for i, it in enumerate(items)}
+        try:
+            for f in concurrent.futures.as_completed(futs):
+                out[futs[f]] = f.result()
+        except BaseException:
+            for f in futs:
+                f.cancel()
+            raise
+    return out
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
 
 
+def _short_repr(value: Any, limit: int = 500) -> str:
+    text = repr(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 @dataclass
 class StepRecord:
     name: str
     func_name: str
-    status: str = "PENDING"          # RUNNING / SUCCESS / FAILED / SKIPPED
-    condition: Optional[str] = None
-    condition_result: Optional[bool] = None
-    loop: Optional[str] = None
-    iterations: int = 0
-    iteration_details: List[Dict[str, Any]] = field(default_factory=list)
+    status: str = "PENDING"          # RUNNING / SUCCESS / FAILED / CANCELLED
     attempts: int = 0
     max_attempts: int = 1
-    parallel: int = 1
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     duration_ms: Optional[float] = None
+    args: Optional[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
     traceback: Optional[str] = None
-    continued: bool = False   # failed but flow continued (continue_on_error)
-    waited_s: Optional[float] = None  # @wait steps: how long the pause was
-    inherited: bool = False   # carried over from the run this one resumed
-    images: List[Dict[str, str]] = field(default_factory=list)  # log_image attachments
-    blocks: List[Dict[str, Any]] = field(default_factory=list)  # log_json / log_table
+    continued: bool = False   # failed but continue_on_error returned None
+    inherited: bool = False   # replayed from the journal, not re-executed
     logs: List[str] = field(default_factory=list)
+    images: List[Dict[str, str]] = field(default_factory=list)
+    blocks: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return dict(self.__dict__)
@@ -94,32 +100,30 @@ class StepRecord:
 class RunRecord:
     run_id: str
     workflow: str
-    status: str = "RUNNING"          # RUNNING / SUCCESS / FAILED
-    parent_run_id: Optional[str] = None   # set when run as a sub-workflow
-    environment: Optional[str] = None     # selected environment name
+    status: str = "RUNNING"          # RUNNING / SUCCESS / FAILED / CANCELLED / INTERRUPTED
+    parent_run_id: Optional[str] = None    # set when run as a sub-workflow
+    resumed_from: Optional[str] = None     # run this one resumed from
+    environment: Optional[str] = None
     env_values: Dict[str, Any] = field(default_factory=dict)
-    tags: List[str] = field(default_factory=list)  # inherited from the workflow class
+    tags: List[str] = field(default_factory=list)
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
-    context: Dict[str, Any] = field(default_factory=dict)  # ctx snapshot (masked)
-    resumed_from: Optional[str] = None    # run this one resumed from
-    resumed_at_step: Optional[str] = None  # step the resume started at
-    # faithful ctx for resume (unmasked, env excluded) — NOT serialized into
-    # the run record; the history store writes it to a separate sidecar file
-    raw_ctx: Dict[str, Any] = field(default_factory=dict)
-    # per-step loop checkpoints for resumable=True loops (sidecar only)
-    loop_progress: Dict[str, Any] = field(default_factory=dict)
-    widgets: List[Dict[str, Any]] = field(default_factory=list)  # dashboard widgets
+    context: Dict[str, Any] = field(default_factory=dict)   # masked snapshot
+    widgets: List[Dict[str, Any]] = field(default_factory=list)
+    logs: List[str] = field(default_factory=list)           # flow-body logs
     started_at: str = ""
     ended_at: Optional[str] = None
     duration_ms: Optional[float] = None
     error: Optional[str] = None
     steps: List[StepRecord] = field(default_factory=list)
+    # resume state — written to the sidecar file, not into the run record
+    raw_ctx: Dict[str, Any] = field(default_factory=dict)
+    journal: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         d = dict(self.__dict__)
-        d.pop("raw_ctx", None)  # resume state lives in the sidecar file only
-        d.pop("loop_progress", None)
+        d.pop("raw_ctx", None)
+        d.pop("journal", None)
         d["steps"] = [s.to_dict() for s in self.steps]
         return d
 
@@ -143,14 +147,17 @@ class WorkflowRunner:
         self.call_chain: List[str] = list(call_chain or [])
         self.env: Dict[str, Any] = dict(env or {})
         self.env_name = env_name
-        # cooperative cancellation flag; sub-workflows share the parent's
+        # cooperative cancellation; sub-workflows share the parent's flag
         self.cancel_event = cancel_event if cancel_event is not None else threading.Event()
-        self._rec_lock = threading.Lock()  # guards step counters in parallel loops
-        # resume: {"ctx": {...}, "start_at": "StepName", "from_run": "<run_id>",
-        #          "prior_steps": [...], "loop_progress": {...}}
+        # resume: {"journal": {...}, "from_run": "<run_id>"}
         self.resume = resume
-        # live checkpoints of resumable loops: {step_name: {done, results}}
-        self.loop_progress: Dict[str, Any] = {}
+        self.journal: Dict[str, Any] = {}
+        self._call_counts: Dict[str, int] = {}
+        self._calls_made = 0
+        self._record: Optional[RunRecord] = None
+        self._lock = threading.Lock()
+        self._depth = threading.local()   # "inside a step" per thread
+        self._cur = threading.local()     # current StepRecord per thread
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunRecord:
@@ -158,84 +165,53 @@ class WorkflowRunner:
 
         wf: Workflow = self.workflow_cls(inputs=self.inputs)
         wf._runner = self
-        # typed inputs: validate + coerce against the class schema (covers
-        # every start path — UI, API, webhook, scheduler, sub-workflow)
-        schema = getattr(self.workflow_cls, "inputs_schema", None)
+        # typed inputs: validate + coerce (covers UI, API, webhook, scheduler)
+        from .inputs import apply_schema, schema_for
+        schema = schema_for(self.workflow_cls)
         input_errors: Dict[str, str] = {}
         if schema:
-            from .inputs import apply_schema
             cleaned, input_errors = apply_schema(schema, wf.inputs)
             if not input_errors:
                 wf.inputs = cleaned
                 wf.ctx.update(cleaned)
-        # steps get the REAL values; "__secrets__" bookkeeping is stripped
         wf.env = {k: v for k, v in self.env.items() if k != "__secrets__"}
-        wf.ctx["env"] = wf.env  # steps + conditions can read env['key']
+        wf.ctx["env"] = wf.env
         if not self.call_chain:
             self.call_chain = [wf.name]
+
         record = RunRecord(
             run_id=self.run_id,
-            loop_progress=self.loop_progress,  # live reference — sidecar sees updates
+            journal=self.journal,          # live reference — sidecar sees updates
             workflow=wf.name,
             parent_run_id=self.parent_run_id,
             environment=self.env_name,
-            env_values=mask_env(self.env),  # persisted/displayed form is masked
+            env_values=mask_env(self.env),
             tags=sorted(getattr(self.workflow_cls, "tags", []) or []),
             inputs=dict(wf.inputs),
             started_at=_now(),
         )
+        self._record = record
         t0 = time.monotonic()
-        if input_errors:
-            record.status = "FAILED"
-            record.error = "input validation failed: " + "; ".join(
-                f"{k}: {v}" for k, v in input_errors.items())
-            record.ended_at = _now()
-            record.duration_ms = 0.0
-            self.on_update(record)
-            return record
-        steps_meta = self.workflow_cls.collect_steps()
-        current = self.workflow_cls.start_step()
-        if self.resume:
-            # restore the context as it was and start at the given step
-            wf.ctx.update(self.resume.get("ctx") or {})
-            wf.ctx["env"] = wf.env  # env is always re-resolved fresh
-            current = self.resume.get("start_at")
-            record.resumed_from = self.resume.get("from_run")
-            record.resumed_at_step = current
-            # carry the original run's completed steps into this report,
-            # marked as inherited (not re-executed)
-            valid = {f.name for f in StepRecord.__dataclass_fields__.values()}
-            for d in self.resume.get("prior_steps") or []:
-                sr = StepRecord(**{k: v for k, v in d.items() if k in valid})
-                sr.inherited = True
-                record.steps.append(sr)
-        if current is None:
-            record.status = "FAILED"
-            record.error = "Workflow has no @start step"
-            record.ended_at = _now()
-            record.duration_ms = (time.monotonic() - t0) * 1000
-            self.on_update(record)
-            return record
 
+        if input_errors:
+            return self._fail_fast(record, t0, "input validation failed: " + "; ".join(
+                f"{k}: {v}" for k, v in input_errors.items()))
+
+        entry = self.workflow_cls.flow_entry()
+        if entry is None:
+            return self._fail_fast(record, t0, "Workflow has no @flow method")
+
+        if self.resume:
+            self.journal.update(self.resume.get("journal") or {})
+            record.resumed_from = self.resume.get("from_run")
+
+        wf._program_runner = self
+        self._install_sinks(wf, record)
         self.on_update(record)
-        visited = 0
         try:
-            while current is not None:
-                self._check_cancelled()
-                visited += 1
-                if visited > MAX_STEPS:
-                    raise RuntimeError(f"Aborted after {MAX_STEPS} steps (possible cycle)")
-                meta = steps_meta.get(current)
-                if meta is None:
-                    raise RuntimeError(f"Unknown step referenced by next=: {current!r}")
-                step_rec = self._make_step_record(meta)
-                record.steps.append(step_rec)
-                self.on_update(record)
-                override_next = self._execute_step(wf, meta, step_rec)
-                record.context = self._snapshot_ctx(wf)  # live view of ctx
-                record.raw_ctx = {k: v for k, v in wf.ctx.items() if k != "env"}
-                self.on_update(record)
-                current = override_next if override_next is not None else meta.get("next")
+            result = entry(wf, wf.ctx)
+            if isinstance(result, dict):
+                wf.outputs(result)
             record.status = "SUCCESS"
         except RunCancelled:
             record.status = "CANCELLED"
@@ -248,316 +224,170 @@ class WorkflowRunner:
             record.status = "FAILED"
             record.error = f"{type(exc).__name__}: {exc}"
         finally:
+            wf._program_runner = None
             record.outputs = dict(wf.outputs())
             record.context = self._snapshot_ctx(wf)
             record.raw_ctx = {k: v for k, v in wf.ctx.items() if k != "env"}
-            record.widgets = list(wf.widgets())[:200]  # sanity cap
+            record.widgets = list(wf.widgets())[:200]
             record.ended_at = _now()
             record.duration_ms = round((time.monotonic() - t0) * 1000, 1)
             self.on_update(record)
         return record
 
-    MAX_ITER_DETAILS = 500
+    def _fail_fast(self, record: RunRecord, t0: float, error: str) -> RunRecord:
+        record.status = "FAILED"
+        record.error = error
+        record.ended_at = _now()
+        record.duration_ms = round((time.monotonic() - t0) * 1000, 1)
+        self.on_update(record)
+        return record
 
-    def _iter_detail(self, rec: StepRecord, idx: int, item: Any, status: str,
-                     t0: float, attempts: Optional[int] = None,
-                     result: Any = None, error: Optional[str] = None,
-                     carried: bool = False) -> None:
-        """Record one loop iteration as a sub-entry shown in the report."""
-        with self._rec_lock:
-            if len(rec.iteration_details) >= self.MAX_ITER_DETAILS:
-                if len(rec.iteration_details) == self.MAX_ITER_DETAILS:
-                    rec.iteration_details.append(
-                        {"i": idx, "status": "…", "item": "detail capped", "carried": False})
-                return
-            rec.iteration_details.append({
-                "i": idx,
-                "item": _short_repr(item, 120),
-                "status": status,
-                "attempts": attempts,
-                "duration_ms": None if carried else round((time.monotonic() - t0) * 1000, 1),
-                "result": _short_repr(result, 200) if result is not None else None,
-                "error": error,
-                "carried": carried,
-            })
+    def _install_sinks(self, wf: Workflow, record: RunRecord) -> None:
+        """Route log/image/block output to the step running on THIS thread
+        (parallel_map runs several at once); body output goes to the run."""
+        def make(kind):
+            def emit(payload):
+                rec = getattr(self._cur, "rec", None)
+                if kind == "log":
+                    (rec.logs if rec else record.logs).append(f"{_now()}  {payload}")
+                elif rec is None:
+                    record.logs.append(f"{_now()}  [{kind} outside a step, ignored]")
+                elif kind == "image":
+                    rec.images.append(payload)
+                else:
+                    rec.blocks.append(payload)
+                    rec.logs.append(
+                        f"{_now()}  [{payload['type']} #{len(rec.blocks)}"
+                        + (f": {payload['title']}" if payload.get("title") else "") + "]")
+            return emit
+        wf._logger, wf._image_sink, wf._block_sink = (
+            make("log"), make("image"), make("block"))
 
     # ---------------------------------------------------------------- steps
-    def _snapshot_ctx(self, wf: Workflow) -> Dict[str, Any]:
-        """Display-safe snapshot of the context for reports: the env dict is
-        left out (it has its own report section), secret-looking keys are
-        masked, and oversized values are truncated to a repr."""
-        from .environments import MASK, is_secret_key
-
-        snap: Dict[str, Any] = {}
-        for k, v in wf.ctx.items():
-            if k == "env":
-                continue
-            if is_secret_key(k):
-                snap[k] = MASK
-                continue
-            try:
-                if len(json.dumps(v, default=str)) <= 2000:
-                    snap[k] = v
-                else:
-                    snap[k] = _short_repr(v, 2000)
-            except Exception:  # noqa: BLE001 - non-serializable value
-                snap[k] = _short_repr(v)
-        return snap
-
     def _check_cancelled(self) -> None:
         if self.cancel_event.is_set():
             raise RunCancelled()
 
-    @staticmethod
-    def _make_step_record(meta: Dict[str, Any]) -> StepRecord:
-        return StepRecord(
-            name=meta["name"],
-            func_name=meta["func_name"],
-            condition=meta.get("condition"),
-            loop=meta.get("loop"),
-            max_attempts=meta.get("retry", 0) + 1,
-            parallel=meta.get("parallel", 1),
-        )
-
-    def _execute_step(self, wf: Workflow, meta: Dict[str, Any],
-                      rec: StepRecord) -> Optional[str]:
-        """Run one step (with condition / loop / retry). Returns an optional
-        runtime override for the next step name."""
-        rec.started_at = _now()
-        t0 = time.monotonic()
-        wf._logger = lambda msg: rec.logs.append(f"{_now()}  {msg}")
-
-        def _image_sink(spec):
-            if len(rec.images) >= Workflow.MAX_IMAGES_PER_STEP:
-                rec.logs.append(f"{_now()}  log_image: image cap reached, skipped")
-                return
-            rec.images.append(spec)
-        wf._image_sink = _image_sink
-
-        def _block_sink(block):
-            if len(rec.blocks) >= Workflow.MAX_BLOCKS_PER_STEP:
-                rec.logs.append(f"{_now()}  log block cap reached, skipped")
-                return
-            rec.blocks.append(block)
-            # marker keeps chronological context inside the text log
-            rec.logs.append(f"{_now()}  [{block['type']} #{len(rec.blocks)}"
-                            + (f": {block['title']}" if block.get("title") else "") + "]")
-        wf._block_sink = _block_sink
-
+    def _step_key(self, name: str, args: tuple, kwargs: dict) -> str:
+        """Stable identity for one step call: name + arguments + occurrence.
+        Argument-based keys keep the journal aligned on replay even if the
+        surrounding loop's order shifts."""
         try:
-            # -- condition gate ------------------------------------------
-            if meta.get("condition"):
-                ok = bool(_eval_expr(meta["condition"], wf.ctx))
-                rec.condition_result = ok
-                if not ok:
-                    rec.status = "SKIPPED"
-                    rec.logs.append(f"{_now()}  condition '{meta['condition']}' is false — step skipped")
-                    return None
+            blob = json.dumps([args, sorted(kwargs.items())], sort_keys=True, default=str)
+        except Exception:  # noqa: BLE001
+            blob = repr((args, kwargs))
+        base = f"{name}:{hashlib.sha1(blob.encode()).hexdigest()[:10]}"
+        with self._lock:
+            n = self._call_counts.get(base, 0) + 1
+            self._call_counts[base] = n
+        return f"{base}:{n}"
 
-            rec.status = "RUNNING"
-            func = getattr(wf, meta["func_name"])
+    def call_step(self, wf: Workflow, func, meta: Dict[str, Any],
+                  args: tuple, kwargs: dict) -> Any:
+        """Invoked by the @step wrapper for every step call in a flow body."""
+        # a step calling another step runs it inline: one journal entry per
+        # call made by the body, not per nested helper call
+        if getattr(self._depth, "n", 0) > 0:
+            return func(wf, *args, **kwargs)
 
-            # -- wait / loop / single execution --------------------------
-            override_next: Optional[str] = None
-            if meta.get("is_wait"):
-                self._run_wait(wf, func, meta, rec)
-            elif meta.get("loop"):
-                var, iterable_expr = _parse_loop(meta["loop"])
-                iterable = _eval_expr(iterable_expr, wf.ctx)
-                workers = int(meta.get("parallel", 1))
-                if workers > 1:
-                    results = self._run_loop_parallel(wf, func, meta, rec, var,
-                                                      list(iterable), workers)
-                else:
-                    results = []
-                    seq_items = list(iterable)
-                    start_idx = 0
-                    track = meta.get("resumable")
-                    if track:
-                        # resuming at this step? seed the checkpointed items
-                        prog = None
-                        if self.resume and self.resume.get("start_at") == meta["name"]:
-                            prog = (self.resume.get("loop_progress") or {}).get(meta["name"])
-                        if prog and 0 < int(prog.get("done", 0)) <= len(seq_items):
-                            start_idx = int(prog["done"])
-                            results = list(prog.get("results") or [])[:start_idx]
-                            rec.iterations = start_idx
-                            rec.logs.append(
-                                f"{_now()}  resumable loop: {start_idx}/{len(seq_items)} "
-                                "item(s) already done in the previous run — skipping them")
-                            for j in range(start_idx):
-                                self._iter_detail(rec, j + 1, seq_items[j], "SUCCESS",
-                                                  0, result=results[j] if j < len(results) else None,
-                                                  carried=True)
-                        self.loop_progress[meta["name"]] = {
-                            "done": start_idx, "results": results}
-                    for item in seq_items[start_idx:]:
-                        self._check_cancelled()
-                        wf.ctx[var] = item
-                        rec.iterations += 1
-                        idx = rec.iterations
-                        att0, it0 = rec.attempts, time.monotonic()
-                        try:
-                            res = self._call_with_retry(wf, func, meta, rec)
-                        except Exception as exc:
-                            self._iter_detail(rec, idx, item, "FAILED", it0,
-                                              attempts=rec.attempts - att0,
-                                              error=f"{type(exc).__name__}: {exc}")
-                            raise
-                        self._iter_detail(rec, idx, item, "SUCCESS", it0,
-                                          attempts=rec.attempts - att0, result=res)
-                        results.append(res)
-                        self._merge_result(wf, res)
-                        if track:
-                            self.loop_progress[meta["name"]]["done"] = len(results)
-                rec.result = _short_repr(results)
-                wf.ctx[f"{_ctx_key(meta['name'])}_results"] = results
-            else:
-                res = self._call_with_retry(wf, func, meta, rec)
-                if isinstance(res, dict) and "__next__" in res:
-                    override_next = res.pop("__next__")
-                self._merge_result(wf, res)
-                if res is not None:
-                    rec.result = _short_repr(res)
-                    wf.ctx[f"{_ctx_key(meta['name'])}_result"] = res
+        self._check_cancelled()
+        with self._lock:
+            self._calls_made += 1
+            if self._calls_made > MAX_STEP_CALLS:
+                raise RuntimeError(
+                    f"Aborted after {MAX_STEP_CALLS} step calls (runaway loop?)")
 
+        record = self._record
+        name = meta["name"]
+        key = self._step_key(name, args, kwargs)
+
+        # ---- replay: this call already completed in the run we resumed from
+        if key in self.journal:
+            entry = self.journal[key]
+            rec = StepRecord(name=name, func_name=meta["func_name"],
+                             status="SUCCESS", inherited=True,
+                             args=_short_repr(args, 200) if args else None,
+                             result=_short_repr(entry.get("result")))
+            with self._lock:
+                record.steps.append(rec)
+            return entry.get("result")
+
+        rec = StepRecord(name=name, func_name=meta["func_name"],
+                         max_attempts=meta.get("retry", 0) + 1,
+                         args=_short_repr(args, 200) if args else None,
+                         started_at=_now(), status="RUNNING")
+        with self._lock:
+            record.steps.append(rec)
+        st0 = time.monotonic()
+        prev_rec = getattr(self._cur, "rec", None)
+        self._cur.rec = rec
+        self._depth.n = getattr(self._depth, "n", 0) + 1
+        try:
+            result = self._call_with_retry(
+                meta, rec, call=lambda: func(wf, *args, **kwargs))
             rec.status = "SUCCESS"
-            return override_next
+            if result is not None:
+                rec.result = _short_repr(result)
+            with self._lock:
+                self.journal[key] = {"name": name, "result": result}
+            return result
+        except RunCancelled:
+            rec.status = "CANCELLED"
+            raise
         except Exception as exc:
             rec.status = "FAILED"
             rec.error = f"{type(exc).__name__}: {exc}"
             rec.traceback = traceback.format_exc()
             if meta.get("continue_on_error"):
                 rec.continued = True
-                wf.ctx[f"{_ctx_key(meta['name'])}_error"] = rec.error
-                rec.logs.append(
-                    f"{_now()}  continue_on_error=True — flow continues with next step"
-                )
-                return None  # proceed to meta["next"]
+                rec.logs.append(f"{_now()}  continue_on_error=True — returning None")
+                return None
             raise
         finally:
+            self._depth.n -= 1
+            self._cur.rec = prev_rec
             rec.ended_at = _now()
-            rec.duration_ms = round((time.monotonic() - t0) * 1000, 1)
-            wf._logger = None
-            wf._image_sink = None
-            wf._block_sink = None
+            rec.duration_ms = round((time.monotonic() - st0) * 1000, 1)
+            self.on_update(record)
 
-    def _run_wait(self, wf: Workflow, func, meta: Dict[str, Any],
-                  rec: StepRecord) -> None:
-        """Run the step body once, then pause for wait_seconds (cancellable)
-        before the flow continues with next."""
-        res = self._call(wf, func)
-        if isinstance(res, dict):
-            self._merge_result(wf, res)
-        spec = meta.get("wait_seconds", 0)
-        seconds = float(_eval_expr(spec, wf.ctx)) if isinstance(spec, str) else float(spec or 0)
-        seconds = max(0.0, seconds)
-        rec.waited_s = seconds
-        rec.logs.append(f"{_now()}  waiting {seconds}s before continuing")
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            self._check_cancelled()
-            time.sleep(min(CANCEL_POLL_SECONDS, max(0.01, deadline - time.monotonic())))
-
-    def _run_loop_parallel(self, wf: Workflow, func, meta: Dict[str, Any],
-                           rec: StepRecord, var: str, items: List[Any],
-                           workers: int) -> List[Any]:
-        """Run loop iterations concurrently. Each iteration gets a snapshot
-        of the context with the loop variable bound; results come back in
-        input order. Any iteration exhausting its retries fails the step."""
-        results: List[Any] = [None] * len(items)
-        rec.logs.append(f"{_now()}  running {len(items)} iteration(s) with parallel={workers}")
-
-        def run_one(idx: int, item: Any, ictx: Dict[str, Any]) -> Any:
-            it0 = time.monotonic()
-            try:
-                res = self._call_with_retry(wf, func, meta, rec, ictx)
-            except RunCancelled:
-                raise
-            except BaseException as exc:
-                self._iter_detail(rec, idx + 1, item, "FAILED", it0,
-                                  error=f"{type(exc).__name__}: {exc}")
-                raise
-            self._iter_detail(rec, idx + 1, item, "SUCCESS", it0, result=res)
-            return res
-
-        with concurrent.futures.ThreadPoolExecutor(
-                max_workers=workers, thread_name_prefix="codeflow-loop") as pool:
-            futures = {}
-            for idx, item in enumerate(items):
-                self._check_cancelled()
-                ictx = dict(wf.ctx)
-                ictx[var] = item
-                futures[pool.submit(run_one, idx, item, ictx)] = idx
-            try:
-                for fut in concurrent.futures.as_completed(futures):
-                    results[futures[fut]] = fut.result()  # re-raises iteration failure
-                    with self._rec_lock:
-                        rec.iterations += 1
-            except BaseException:
-                for f in futures:
-                    f.cancel()  # un-started iterations are dropped
-                raise
-        rec.iteration_details.sort(key=lambda d: d.get("i", 0))
-        # merge in input order so precedence is deterministic
-        for res in results:
-            self._merge_result(wf, res)
-        wf.ctx[var] = items[-1] if items else None
-        return results
-
-    def _call_with_retry(self, wf: Workflow, func, meta: Dict[str, Any],
-                         rec: StepRecord, ctx: Optional[Dict[str, Any]] = None) -> Any:
+    def _call_with_retry(self, meta: Dict[str, Any], rec: StepRecord,
+                         call: Callable[[], Any]) -> Any:
         retries = meta.get("retry", 0)
         base_delay = meta.get("retry_delay", 0)
         backoff = meta.get("retry_backoff", 1) or 1
-        retry_on = meta.get("retry_on")  # None = everything is retryable
+        retry_on = meta.get("retry_on")     # None = everything is retryable
         timeout = meta.get("timeout")
         last_exc: Optional[Exception] = None
         for attempt in range(1, retries + 2):
             self._check_cancelled()
-            with self._rec_lock:
+            with self._lock:
                 rec.attempts += 1
             try:
-                return self._call(wf, func, timeout, ctx)
-            except Exception as exc:  # noqa: BLE001 - reported in record
+                return self._call(call, timeout)
+            except Exception as exc:  # noqa: BLE001 - reported in the record
                 last_exc = exc
                 rec.logs.append(
                     f"{_now()}  attempt {attempt}/{retries + 1} failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
+                    f"{type(exc).__name__}: {exc}")
                 if retry_on is not None and not isinstance(exc, retry_on):
                     rec.logs.append(
                         f"{_now()}  {type(exc).__name__} is not in retry_on="
-                        f"({', '.join(c.__name__ for c in retry_on)}) — failing immediately"
-                    )
+                        f"({', '.join(c.__name__ for c in retry_on)}) — failing immediately")
                     raise
                 if attempt <= retries and base_delay:
                     delay = base_delay * (backoff ** (attempt - 1))
                     if backoff > 1:
                         rec.logs.append(f"{_now()}  backing off {round(delay, 2)}s")
-                    # sleep in small slices so cancellation stays responsive
-                    deadline = time.monotonic() + delay
-                    while time.monotonic() < deadline:
-                        self._check_cancelled()
-                        time.sleep(min(CANCEL_POLL_SECONDS, deadline - time.monotonic()))
+                    self.sleep(delay)
         raise last_exc  # type: ignore[misc]
 
-    def _call(self, wf: Workflow, func, timeout: Optional[float] = None,
-              ctx: Optional[Dict[str, Any]] = None) -> Any:
-        """Call a step method (with or without the ctx argument), enforcing
-        timeout= and staying responsive to cancellation.
-
-        The function runs in a helper thread; this thread polls the future.
-        A timed-out or cancelled call is ABANDONED (Python threads cannot be
-        killed) — it may keep running in the background, but the flow moves
-        on. Steps with timeouts should therefore be safe to duplicate."""
-        use_ctx = ctx if ctx is not None else wf.ctx
-        sig = inspect.signature(func)
-        call = (lambda: func(use_ctx)) if len(sig.parameters) >= 1 else func
-
+    def _call(self, call: Callable[[], Any], timeout: Optional[float] = None) -> Any:
+        """Run the step call, enforcing timeout= and staying responsive to
+        cancellation. A timed-out or cancelled call is ABANDONED (Python
+        threads cannot be killed) — it may keep running in the background,
+        so steps with timeouts should be safe to duplicate."""
         if timeout is None and not self.cancel_event.is_set():
-            # fast path — still cancellable at step boundaries
-            return call()
+            return call()                      # fast path
 
         pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="codeflow-step")
@@ -575,14 +405,33 @@ class WorkflowRunner:
                 future.cancel()
                 raise StepTimeoutError(
                     f"step exceeded timeout of {timeout}s (attempt abandoned)")
-        return future.result()  # re-raises the step's own exception, if any
+        return future.result()
 
-    @staticmethod
-    def _merge_result(wf: Workflow, res: Any) -> None:
-        if isinstance(res, dict):
-            wf.ctx.update(res)
+    def sleep(self, seconds: float) -> None:
+        """Sleep in slices so cancellation stays responsive."""
+        deadline = time.monotonic() + max(0.0, seconds)
+        while time.monotonic() < deadline:
+            self._check_cancelled()
+            time.sleep(min(CANCEL_POLL_SECONDS, max(0.01, deadline - time.monotonic())))
 
+    # -------------------------------------------------------------- context
+    def _snapshot_ctx(self, wf: Workflow) -> Dict[str, Any]:
+        """Display-safe snapshot for the report: env excluded (it has its own
+        section), secret-looking keys masked, oversized values truncated."""
+        from .environments import MASK, is_secret_key
 
-def _short_repr(value: Any, limit: int = 500) -> str:
-    text = repr(value)
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+        snap: Dict[str, Any] = {}
+        for k, v in wf.ctx.items():
+            if k == "env":
+                continue
+            if is_secret_key(k):
+                snap[k] = MASK
+                continue
+            try:
+                if len(json.dumps(v, default=str)) <= 2000:
+                    snap[k] = v
+                else:
+                    snap[k] = _short_repr(v, 2000)
+            except Exception:  # noqa: BLE001 - non-serializable value
+                snap[k] = _short_repr(v)
+        return snap

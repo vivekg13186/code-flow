@@ -146,7 +146,7 @@ sub-workflows. `404` if unknown/finished, `409` if not RUNNING.
 
 Start a **new** run of the same flow with the original run's inputs and
 environment. Env values are re-resolved fresh at restart time. `404` if the
-flow or environment no longer exists; `422` if the flow's `inputs_schema`
+flow or environment no longer exists; `422` if the flow's inputs dataclass
 changed and the old inputs no longer validate.
 
 Response: `{ "run_id": "…", "workflow": "…", "environment": "…", "restarted_from": "…" }`

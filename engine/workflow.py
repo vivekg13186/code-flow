@@ -7,24 +7,33 @@ from typing import Any, Dict, List, Optional
 class Workflow:
     """Base class for all workflows.
 
-    Subclass it and declare steps with @start / @step. Example::
+    Subclass it and give it exactly one ``@flow`` method — an ordinary Python
+    body that calls ``@step`` methods::
+
+        @dataclass
+        class Inputs:
+            amount: float = 10.0
 
         class Flow1(Workflow):
             description = "Says hello"
+            inputs = Inputs
 
-            @start(next="Step1")
-            def begin(self, ctx):
-                return {"a": 42}
+            @flow
+            def main(self, ctx):
+                total = self.charge(ctx["amount"])
+                self.log(f"charged {total}")
+                return {"total": total}
 
-            @step(name="Step1")
-            def step1(self, ctx):
-                self.log(f"a is {ctx['a']}")
+            @step(retry=2, timeout=30)
+            def charge(self, amount):
+                return amount * 1.2
 
-    Steps receive the shared context dict ``ctx`` (inputs + everything merged
-    from previous steps' returned dicts). A step that returns a dict has that
-    dict merged into the context. ``self.log(...)`` records a line into the
-    execution report. ``self.set_output(...)`` / ``self.outputs(...)`` record
-    workflow outputs shown in the report.
+    ``ctx`` is a plain dict of the validated run inputs plus ``ctx["env"]``.
+    Steps take ordinary arguments and return ordinary values; each call is
+    journaled, so a resumed run replays the body and completed steps return
+    instantly. Keep the body pure — it re-executes on resume.
+    ``self.log(...)`` records a line into the execution report;
+    ``self.set_output(...)`` / ``self.outputs(...)`` record workflow outputs.
     """
 
     #: optional human description shown in the UI
@@ -39,15 +48,16 @@ class Workflow:
     webhook_token: Optional[str] = None
     #: tags used to group/filter workflows and their runs in the UI
     tags: List[str] = []
-    #: default inputs (may be overridden per-run)
-    inputs: Dict[str, Any] = {}
-    #: optional typed-input schema — validates/coerces run inputs and turns
-    #: the run dialog into a form. See engine/inputs.py for the spec format.
-    inputs_schema: Dict[str, Dict[str, Any]] = {}
+    #: run inputs — either a @dataclass TYPE (typed: validated, coerced and
+    #: rendered as a form) or a plain dict of untyped defaults.
+    #: See engine/inputs.py. The flow body always receives a plain dict ctx.
+    inputs: Any = {}
 
     def __init__(self, name: Optional[str] = None, inputs: Optional[Dict[str, Any]] = None):
+        from .inputs import defaults_for
+
         self.name = name or getattr(self.__class__, "name_override", None) or self.__class__.__name__
-        merged = dict(getattr(self.__class__, "inputs", {}) or {})
+        merged = defaults_for(self.__class__)
         merged.update(inputs or {})
         self.inputs = merged
         self.ctx: Dict[str, Any] = dict(merged)
@@ -56,6 +66,7 @@ class Workflow:
         self._image_sink = None  # injected by the runner (log_image target)
         self._block_sink = None  # injected by the runner (log_json/log_table)
         self._runner = None  # injected by the runner (used by call_workflow)
+        self._program_runner = None  # set while a program-mode flow body runs
         self.env: Dict[str, Any] = {}  # selected environment (set by the runner)
         self._widgets: List[Dict[str, Any]] = []
 
@@ -106,10 +117,10 @@ class Workflow:
         The child inherits the parent's environment; pass ``env="prod"`` to
         run it against a different environment from ``environments/``.
 
-            @step(name="Charge")
-            def charge(self, ctx):
-                out = self.call_workflow("PaymentFlow", inputs={"amount": ctx["amount"]})
-                return {"receipt": out["receipt_id"]}
+            @step(timeout=300)
+            def charge(self, amount):
+                out = self.call_workflow("PaymentFlow", inputs={"amount": amount})
+                return out["receipt_id"]
         """
         from .registry import discover_workflows, get_workflows_dir
         from .runner import WorkflowRunner
@@ -160,6 +171,27 @@ class Workflow:
                 f"Sub-workflow {workflow_name} failed (run {record.run_id}): {record.error}"
             )
         return dict(record.outputs)
+
+    def sleep(self, seconds: float) -> None:
+        """Pause the flow, staying responsive to cancellation.
+
+        Journaled like a step, so a resumed run does not sleep again.
+        """
+        runner = self._program_runner
+        if runner is None:  # pragma: no cover - outside a run
+            import time as _t
+            _t.sleep(seconds)
+            return
+        meta = {"name": "sleep", "func_name": "sleep", "retry": 0,
+                "retry_delay": 0, "retry_backoff": 1, "retry_on": None,
+                "continue_on_error": False, "timeout": None}
+
+        def _do_sleep(wf, secs):
+            wf.log(f"sleeping {secs}s")
+            runner.sleep(secs)
+            return {"slept": secs}
+
+        runner.call_step(self, _do_sleep, meta, (float(seconds),), {})
 
     def log(self, message: Any) -> None:
         """Log a message into the current step's execution report."""
@@ -281,12 +313,14 @@ class Workflow:
         return steps
 
     @classmethod
-    def start_step(cls) -> Optional[str]:
-        for name, meta in cls.collect_steps().items():
-            if meta.get("is_start"):
-                return name
+    def flow_entry(cls):
+        """The @flow-decorated method of a program-based workflow, or None."""
+        for attr_name in dir(cls):
+            attr = getattr(cls, attr_name, None)
+            if getattr(attr, "_is_flow_entry", False):
+                return attr
         return None
 
     @classmethod
     def is_workflow(cls) -> bool:
-        return cls is not Workflow and cls.start_step() is not None
+        return cls is not Workflow and cls.flow_entry() is not None

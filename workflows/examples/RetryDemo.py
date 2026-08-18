@@ -1,7 +1,7 @@
 """Demonstrates retry_on and continue_on_error."""
 import random
 
-from engine import Workflow, start, step
+from engine import Workflow, flow, step
 
 
 class RetryDemoFlow(Workflow):
@@ -9,30 +9,30 @@ class RetryDemoFlow(Workflow):
     it always fails, but continue_on_error lets the flow finish anyway."""
 
     description = "retry_on + continue_on_error demo"
+    tags = ["demo"]
     inputs = {"fail_rate": 0.6}
 
-    @start(next="FetchData")
-    def begin(self, ctx):
-        self.log("starting")
+    @flow
+    def main(self, ctx):
+        rows = self.fetch(ctx["fail_rate"])
 
-    @step(name="FetchData", next="SendMetrics",
-          retry=5, retry_delay=0.3, retry_on=ConnectionError)
-    def fetch(self, ctx):
+        # continue_on_error steps return None instead of raising
+        metrics = self.send_metrics()
+        if metrics is None:
+            self.log("metrics failed — continuing, it is best-effort")
+
+        return {"rows": rows, "metrics_ok": metrics is not None}
+
+    @step(retry=5, retry_delay=0.3, retry_on=ConnectionError, timeout=20)
+    def fetch(self, fail_rate):
         """Flaky network call — ConnectionError is retried up to 5x.
-        Any other exception type would fail the step immediately."""
-        if random.random() < ctx["fail_rate"]:
+        Any other exception type fails the step immediately."""
+        if random.random() < fail_rate:
             raise ConnectionError("upstream unreachable")
         self.log("data fetched")
-        return {"rows": 42}
+        return 42
 
-    @step(name="SendMetrics", next="Done", continue_on_error=True)
-    def metrics(self, ctx):
-        """Best-effort: always fails, but the flow continues. The error is
-        stored in ctx['SendMetrics_error'] for later steps to inspect."""
+    @step(continue_on_error=True)
+    def send_metrics(self):
+        """Best-effort: always fails, but the flow continues."""
         raise RuntimeError("metrics endpoint is down")
-
-    @step(name="Done")
-    def done(self, ctx):
-        if "SendMetrics_error" in ctx:
-            self.log(f"finished despite: {ctx['SendMetrics_error']}")
-        self.outputs({"rows": ctx["rows"], "metrics_ok": "SendMetrics_error" not in ctx})
