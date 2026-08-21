@@ -25,6 +25,7 @@ from .workflow import Workflow
 from .runner import (WorkflowRunner, RunRecord, StepRecord, StepTimeoutError,
                      NondeterminismError, parallel_map)
 from .registry import discover_workflows
+from .steps import HttpError, HttpClientError, HttpServerError, ShellError
 
 __all__ = [
     "flow",
@@ -37,4 +38,9 @@ __all__ = [
     "StepRecord",
     "StepTimeoutError",
     "discover_workflows",
+    # standard step library errors (self.http / self.fs / self.sh / self.db)
+    "HttpError",
+    "HttpClientError",
+    "HttpServerError",
+    "ShellError",
 ]

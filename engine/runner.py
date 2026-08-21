@@ -389,9 +389,20 @@ class WorkflowRunner:
         if timeout is None and not self.cancel_event.is_set():
             return call()                      # fast path
 
+        # The call runs on a helper thread, but _cur/_depth are thread-locals:
+        # without carrying them across, self.log() inside a step that has a
+        # timeout= would land on the run instead of on the step.
+        cur_rec = getattr(self._cur, "rec", None)
+        depth = getattr(self._depth, "n", 0)
+
+        def _bound():
+            self._cur.rec = cur_rec
+            self._depth.n = depth
+            return call()
+
         pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="codeflow-step")
-        future = pool.submit(call)
+        future = pool.submit(_bound)
         pool.shutdown(wait=False)
         deadline = time.monotonic() + timeout if timeout else None
         while not future.done():

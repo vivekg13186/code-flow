@@ -46,6 +46,9 @@ BODY_SIDE_EFFECTS = ("open", "os.remove", "os.unlink", "os.mkdir", "shutil.rmtre
 IMPORT_TIME = ("session", "connect", "create_engine", "client", "open",
                "request", "urlopen", "run", "popen", "write_text", "write_bytes")
 GRAPH_ARGS = {"next", "condition", "loop", "resumable", "parallel", "seconds"}
+# standard step library — self.http.get(...) & co ARE journaled steps, so they
+# are legal in a flow body and must not be reported as side effects (CF031)
+STD_NAMESPACES = {"http", "fs", "sh", "db"}
 
 
 class Finding:
@@ -201,7 +204,13 @@ def _lint_class(path: Path, cls: ast.ClassDef,
                             and isinstance(sub.func.value, ast.Name)
                             and sub.func.value.id == "self"
                             and called in step_names)
-            if is_self_step:
+            # self.http.get(...) / self.fs.write_json(...) — library steps
+            is_std_step = (isinstance(sub.func, ast.Attribute)
+                           and isinstance(sub.func.value, ast.Attribute)
+                           and isinstance(sub.func.value.value, ast.Name)
+                           and sub.func.value.value.id == "self"
+                           and sub.func.value.attr in STD_NAMESPACES)
+            if is_self_step or is_std_step:
                 continue
             if any(dotted == n or dotted.endswith("." + n) or called == n
                    for n in BODY_SIDE_EFFECTS):

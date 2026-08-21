@@ -99,6 +99,40 @@ self.call_workflow("Other", inputs={...}, env=None)
     # raises if it fails; inherits env unless env="name"; cycles detected
 parallel_map(self.step_method, items, workers=4)   # module-level import
 
+## Standard step library (self.http / self.fs / self.sh / self.db)
+
+Ready-made journaled steps — report entries, retries, timeouts and resume all
+apply exactly as for your own steps. Legal to call directly from a @flow body.
+
+http  get·post·put·patch·delete·download(url,dest) · request(m,url)=no retry
+      -> {"status","ok","json"(None if not JSON),"text","headers",
+          "elapsed_ms","url","method"}
+      2 retries 1s/2s backoff on network errors + 5xx/429; 4xx raises
+      HttpClientError at once; check=False returns instead of raising.
+fs    read_text·read_json(dirty=)·read_csv(limit=)·read_yaml·glob·stat
+      write_text(append=)·write_json·write_csv·copy·move·remove·ensure_dir
+      ·archive·unpack. Writes mkdir -p; copy/move need overwrite=True to
+      clobber; stat() -> {"exists":False,...} instead of raising.
+sh    run(cmd, cwd=, env=, timeout=, check=, shell=, input=) ·which(prog)
+      -> {"cmd","returncode","ok","stdout","stderr","duration_ms"}
+      str cmd = shell (pipes work), list = no shell (use for untrusted input);
+      non-zero exit raises ShellError unless check=False; timeout= KILLS the
+      process (step timeout= only abandons).
+db    query(db,sql,params,limit=)·query_one·execute·executemany·script
+      ·table_exists — SQLite, stdlib, one connection per call (parallel-safe),
+      params always bound.
+
+Errors importable from engine: HttpError, HttpClientError, HttpServerError,
+ShellError.
+
+Library rules that apply to YOUR steps too:
+- every return value must be JSON-serializable (the journal restores it);
+- never take a callable as a step argument — repr() holds a memory address,
+  so the journal key changes every process and resume silently re-runs it.
+Caps before the journal: 200k chars text/HTTP body, 100k command output,
+50k rows read_csv/db.query. Move more than that inside your own step and
+return a summary.
+
 ## Environments & secrets
 
 `environments/*.json` — file name = env name, chosen per run. Values may
@@ -192,4 +226,5 @@ logs) · Flow3.py (sub-workflows) · examples/HelloFlow (shared _lib +
 log_image) · examples/OpsDashboard (widgets + inputs) ·
 examples/ParallelFetch (parallel_map + backoff + webhook) ·
 examples/RetryDemo (retry_on + continue_on_error) · examples/ResumeDemo
-(resume, incl. inside a loop) · examples/LoopPatterns (tolerant loops).
+(resume, incl. inside a loop) · examples/LoopPatterns (tolerant loops) · examples/StdLib
+(standard step library).

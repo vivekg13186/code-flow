@@ -69,6 +69,36 @@ class Workflow:
         self._program_runner = None  # set while a program-mode flow body runs
         self.env: Dict[str, Any] = {}  # selected environment (set by the runner)
         self._widgets: List[Dict[str, Any]] = []
+        self._ns: Dict[str, Any] = {}   # standard step-library namespaces
+
+    # ------------------------------------------- standard step library
+    def _namespace(self, key: str):
+        """Lazily build and cache one standard-library namespace."""
+        ns = self._ns.get(key)
+        if ns is None:
+            from .steps import NAMESPACES
+            ns = self._ns[key] = NAMESPACES[key](self)
+        return ns
+
+    @property
+    def http(self):
+        """HTTP steps — ``self.http.get(url)`` etc. See engine/steps.py."""
+        return self._namespace("http")
+
+    @property
+    def fs(self):
+        """File steps — read/write text, JSON, CSV, YAML; copy/move/archive."""
+        return self._namespace("fs")
+
+    @property
+    def sh(self):
+        """Shell steps — ``self.sh.run("./script.sh")``."""
+        return self._namespace("sh")
+
+    @property
+    def db(self):
+        """SQLite steps — ``self.db.query("ops.db", "SELECT ...")``."""
+        return self._namespace("db")
 
     # ------------------------------------------------------------------ api
     def outputs(self, outputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
